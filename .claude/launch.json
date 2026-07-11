@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "vebege-site",
+      "runtimeExecutable": "php",
+      "runtimeArgs": ["-S", "127.0.0.1:8017", "-t", "E:/Sync/James Hansen/JustShowMe - Policy Coding Project/vebege.io"],
+      "port": 8017
+    }
+  ]
+}

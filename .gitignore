@@ -1,0 +1,16 @@
+Debug/
+Release/
+x64/
+Win32/
+obj/
+bin/
+*.user
+*.suo
+.vs/
+msix/staging/
+*.msix
+Installer/
+Testing/out
+nuget.exe
+INTERNAL-README.md
+Testing/out_old/

@@ -1,0 +1,49 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.31624.102
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "vebege_service", "vebege_service\vebege_service.csproj", "{C3D40001-0001-4B01-8E01-000000000011}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "vebege_selfcheck", "selfcheck\selfcheck.csproj", "{C3D40002-0002-4B02-8E02-000000000022}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "vebege_cam", "vebege_cam\softcam\vebege_cam.vcxproj", "{7C4A9E12-3F58-4D07-8B66-2E91C0A4D5F1}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "vebege_cam_baseclasses", "vebege_cam\softcam_baseclasses\softcam_baseclasses.vcxproj", "{E8A3F6FA-AE1C-4C8E-A0B6-9C8480324EAA}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "vebege_cam_core", "vebege_cam\softcam_core\softcam_core.vcxproj", "{DF9D5A2D-3BED-4D1A-8484-22A654C9AD76}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{C3D40001-0001-4B01-8E01-000000000011}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{C3D40001-0001-4B01-8E01-000000000011}.Debug|x64.Build.0 = Debug|Any CPU
+		{C3D40001-0001-4B01-8E01-000000000011}.Release|x64.ActiveCfg = Release|Any CPU
+		{C3D40001-0001-4B01-8E01-000000000011}.Release|x64.Build.0 = Release|Any CPU
+		{C3D40002-0002-4B02-8E02-000000000022}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{C3D40002-0002-4B02-8E02-000000000022}.Debug|x64.Build.0 = Debug|Any CPU
+		{C3D40002-0002-4B02-8E02-000000000022}.Release|x64.ActiveCfg = Release|Any CPU
+		{C3D40002-0002-4B02-8E02-000000000022}.Release|x64.Build.0 = Release|Any CPU
+		{7C4A9E12-3F58-4D07-8B66-2E91C0A4D5F1}.Debug|x64.ActiveCfg = Debug|x64
+		{7C4A9E12-3F58-4D07-8B66-2E91C0A4D5F1}.Debug|x64.Build.0 = Debug|x64
+		{7C4A9E12-3F58-4D07-8B66-2E91C0A4D5F1}.Release|x64.ActiveCfg = Release|x64
+		{7C4A9E12-3F58-4D07-8B66-2E91C0A4D5F1}.Release|x64.Build.0 = Release|x64
+		{E8A3F6FA-AE1C-4C8E-A0B6-9C8480324EAA}.Debug|x64.ActiveCfg = Debug|x64
+		{E8A3F6FA-AE1C-4C8E-A0B6-9C8480324EAA}.Debug|x64.Build.0 = Debug|x64
+		{E8A3F6FA-AE1C-4C8E-A0B6-9C8480324EAA}.Release|x64.ActiveCfg = Release|x64
+		{E8A3F6FA-AE1C-4C8E-A0B6-9C8480324EAA}.Release|x64.Build.0 = Release|x64
+		{DF9D5A2D-3BED-4D1A-8484-22A654C9AD76}.Debug|x64.ActiveCfg = Debug|x64
+		{DF9D5A2D-3BED-4D1A-8484-22A654C9AD76}.Debug|x64.Build.0 = Debug|x64
+		{DF9D5A2D-3BED-4D1A-8484-22A654C9AD76}.Release|x64.ActiveCfg = Release|x64
+		{DF9D5A2D-3BED-4D1A-8484-22A654C9AD76}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {D4E5F6A7-1B2C-4D3E-9F80-6C7D8E9FA0B1}
+	EndGlobalSection
+EndGlobal

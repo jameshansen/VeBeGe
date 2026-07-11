@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  VeBeGe MSIX manifest (full-trust desktop app).
+
+  Store notes:
+    - Identity Name/Publisher below are placeholders; Partner Center assigns
+      the real values when the app is reserved (replace before submission).
+    - unvirtualizedResources is a restricted capability: VeBeGe must write
+      the real HKCU\Software\Classes (so other apps' DirectShow enumeration
+      sees the virtual cameras) and the real %ProgramData%\VeBeGe (the
+      registered driver DLL must live at a path all apps can load). Justify
+      both in the submission notes.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:desktop6="http://schemas.microsoft.com/appx/manifest/desktop/windows10/6"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap desktop desktop6 rescap">
+
+  <Identity Name="VeBeGe"
+            Publisher="CN=VeBeGe"
+            Version="1.0.0.0"
+            ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>VeBeGe</DisplayName>
+    <PublisherDisplayName>VeBeGe</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <!-- Writes must land in the REAL registry/filesystem: other processes
+         (Zoom, Chrome, OBS...) have to see the camera registrations and load
+         the driver DLL from %ProgramData%\VeBeGe. -->
+    <desktop6:RegistryWriteVirtualization>disabled</desktop6:RegistryWriteVirtualization>
+    <desktop6:FileSystemWriteVirtualization>disabled</desktop6:FileSystemWriteVirtualization>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.18362.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="VeBeGe" Executable="vebege_service.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="VeBeGe"
+        Description="Virtual background versions of your webcams that just work, no app to run, no buttons to press."
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png" />
+      <Extensions>
+        <!-- The whole product: start the headless service at login. -->
+        <desktop:Extension Category="windows.startupTask" Executable="vebege_service.exe" EntryPoint="Windows.FullTrustApplication">
+          <desktop:StartupTask TaskId="VeBeGeService" Enabled="true" DisplayName="VeBeGe" />
+        </desktop:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+    <rescap:Capability Name="unvirtualizedResources" />
+    <DeviceCapability Name="webcam" />
+  </Capabilities>
+</Package>
