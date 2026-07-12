@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using OpenCvSharp;
 
@@ -20,6 +21,13 @@ namespace VeBeGe
         private readonly FaceTracker _tracker = new FaceTracker();
         private Mat _tierTwoBg;   // background composite (tier one + tier two) before the user goes on.
 
+        // YuNet costs ~20 ms/frame, but skipping frames proved too lossy: at low
+        // effective fps a walker moves too far between samples and slips through.
+        // Keep 1 (detect every frame) unless the fps budget truly demands it.
+        private const int DetectEvery = 1;
+        private int _frameNo;
+        private IReadOnlyList<Rect> _lastDetections = new Rect[0];
+
         /// Diagnostic hooks (used by the Testing harness): the per-frame
         /// foreground mask (255 = subject), the accumulated virtual background
         /// plate (black where still unknown), and the motion heatmap (cooldown
@@ -33,6 +41,20 @@ namespace VeBeGe
         /// filling any still-unknown movers. Snapshot before the user is painted
         /// back on. Valid after Process.
         public Mat TierTwoBackground => _tierTwoBg;
+
+        /// Per-stage wall times (ms) of the last Process call, in pipeline order.
+        /// Diagnostics for the Testing harness; costs ~nothing to maintain.
+        public readonly List<KeyValuePair<string, double>> LastStageMs =
+            new List<KeyValuePair<string, double>>();
+        private readonly Stopwatch _stageSw = new Stopwatch();
+        private double _stageLast;
+
+        private void Mark(string stage)
+        {
+            double now = _stageSw.Elapsed.TotalMilliseconds;
+            LastStageMs.Add(new KeyValuePair<string, double>(stage, now - _stageLast));
+            _stageLast = now;
+        }
 
         /// Motion-heatmap tuning, forwarded to the background model
         /// (ini [Filter] HeatMinFlow / HeatSpread / HeatCooldownSeconds).
@@ -66,9 +88,13 @@ namespace VeBeGe
         public void Process(Mat frame, int padPx, int stayFrames, double bodyScale)
         {
             if (frame == null || frame.Empty()) return;
+            LastStageMs.Clear();
+            _stageSw.Restart();
+            _stageLast = 0;
 
             // Split the frame into the live subject and the background plane.
             _vbm.UpdateMask(frame, padPx);
+            Mark("seg");
             if (_vbm.ForegroundMask == null) return;
 
             using (var clean = frame.Clone())
@@ -76,8 +102,14 @@ namespace VeBeGe
                 // Detect faces on the background cutout only, so the webcam
                 // user is never treated as a background person.
                 IReadOnlyList<Rect> detections;
-                using (var cut = _vbm.BackgroundCutout(frame))
-                    detections = _detector.Detect(cut);
+                if (_frameNo++ % DetectEvery == 0)
+                {
+                    using (var cut = _vbm.BackgroundCutout(frame))
+                        detections = _detector.Detect(cut);
+                    _lastDetections = detections;
+                }
+                else detections = _lastDetections;
+                Mark("detect");
 
                 _tracker.MaxAge = Math.Max(0, stayFrames);
                 var people = new List<Rect>();
@@ -88,13 +120,23 @@ namespace VeBeGe
                 // with the learned plate (unlearned areas keep the live frame),
                 // then composite the live subject back on top.
                 _vbm.Update(frame, people);
+                Mark("update");
+                // Split update into its two halves for the diagnostics.
+                LastStageMs[LastStageMs.Count - 1] = new KeyValuePair<string, double>(
+                    "learn", LastStageMs[LastStageMs.Count - 1].Value - _vbm.LastHeatMs);
+                LastStageMs.Insert(LastStageMs.Count - 1,
+                    new KeyValuePair<string, double>("heat", _vbm.LastHeatMs));
+                LastStageMs.AddRange(_vbm.LastHeatStages);   // heat's internal phases
                 _vbm.FillKnownBackground(frame, new Rect(0, 0, frame.Width, frame.Height));
+                Mark("fill");
                 // Fallback for movers we can't erase (no learned background behind them
                 // yet): inpaint out everything hot-but-unknown from its surroundings.
                 _vbm.FillTierTwo(frame);
+                Mark("tier2");
                 _tierTwoBg?.Dispose();
                 _tierTwoBg = frame.Clone();   // the background composite, before the user goes on
                 _vbm.CompositeForeground(clean, frame);
+                Mark("comp");
             }
         }
 

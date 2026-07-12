@@ -7,10 +7,13 @@
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\test-samples.ps1
     powershell -ExecutionPolicy Bypass -File .\test-samples.ps1 -Loops 3
+    powershell -ExecutionPolicy Bypass -File .\test-samples.ps1 -MaxSeconds 10 -Realtime
 #>
 [CmdletBinding()]
 param(
     [int]$Loops = 2,
+    [double]$MaxSeconds = 0,   # only process the first N seconds of each clip (0 = all)
+    [switch]$Realtime,         # drop frames while busy, like a live camera
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Release'
 )
@@ -34,7 +37,9 @@ foreach ($dir in $samples) {
     New-Item -ItemType Directory -Force $outDir | Out-Null
 
     Write-Host "`n=== $name : $($video.Name) -> out_$name ===" -ForegroundColor Cyan
-    & $exe $video.FullName $Loops $outDir
+    $callArgs = @($video.FullName, $Loops, $outDir, $MaxSeconds)
+    if ($Realtime) { $callArgs += 'rt' }
+    & $exe @callArgs
     if ($LASTEXITCODE -ne 0) { throw "Processing failed for $name (exit $LASTEXITCODE)." }
 }
 

@@ -63,7 +63,7 @@ namespace VeBeGe.Testing
                     {
                         sw.Restart();
                         filter.Process(frame, pad, stayFrames, bodyScale);
-                        perf.Record(sw.Elapsed.TotalMilliseconds);
+                        perf.Record(sw.Elapsed.TotalMilliseconds, filter.LastStageMs);
                         Cv2.ImShow("processed", frame);
 
                         Mat mask = filter.ForegroundMask;

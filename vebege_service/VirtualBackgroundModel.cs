@@ -57,6 +57,21 @@ namespace VeBeGe
         /// The live motion heatmap (cooldown frames remaining; 0 = cold). Diagnostic view.
         public Mat Heat => _heat;
 
+        /// Wall time (ms) UpdateHeat took inside the last Update call, plus its
+        /// internal phase breakdown. Diagnostics for the Testing harness.
+        public double LastHeatMs { get; private set; }
+        public readonly List<KeyValuePair<string, double>> LastHeatStages =
+            new List<KeyValuePair<string, double>>();
+        private readonly System.Diagnostics.Stopwatch _heatSw = new System.Diagnostics.Stopwatch();
+        private double _heatLast;
+
+        private void HeatMark(string stage)
+        {
+            double now = _heatSw.Elapsed.TotalMilliseconds;
+            LastHeatStages.Add(new KeyValuePair<string, double>(stage, now - _heatLast));
+            _heatLast = now;
+        }
+
         public VirtualBackgroundModel(PersonSegmenter segmenter) { _segmenter = segmenter; }
 
         public Mat ForegroundMask => _fgMask;
@@ -136,7 +151,9 @@ namespace VeBeGe
         public void Update(Mat frame, IReadOnlyList<Rect> people)
         {
             if (_fgMask == null) return;
+            var heatSw = System.Diagnostics.Stopwatch.StartNew();
             bool cameraEvent = UpdateHeat(frame, people);
+            LastHeatMs = heatSw.Elapsed.TotalMilliseconds;
             // Camera event (shake / pan / exposure step): the frame tells us
             // nothing about people, so change nothing, don't learn, don't
             // reset. The plate survives transients intact.
@@ -167,44 +184,66 @@ namespace VeBeGe
                 else
                 {
                     int cooldown = Math.Max(1, Math.Min(255, HeatCooldownFrames));
-                    // Soft motion gate. coldW in [0,1] is per-pixel "coldness": 1 where
-                    // fully cold (heat 0 ⇒ learn at full rate), 0 where fully hot, ramping
-                    // across the heat's soft edge, gated to background (no person) pixels.
-                    // Scaling the learn rate by it fades the plate in across the boundary
-                    // instead of switching it on at a hard ring.
-                    using (var coldW = new Mat())      // CV_32F, background-gated coldness
                     using (var coldHard = new Mat())   // 255 = fully-cold background (seed/known gate)
+                    using (var softBand = new Mat())   // 255 where heat is mid-ramp (needs float blend)
                     {
-                        _heat.ConvertTo(coldW, MatType.CV_32FC1, -1.0 / cooldown, 1.0);   // 1..0
-                        using (var bgf = new Mat())
-                        {
-                            bg.ConvertTo(bgf, MatType.CV_32FC1, 1.0 / 255.0);            // background 0/1
-                            Cv2.Multiply(coldW, bgf, coldW);
-                        }
                         Cv2.Compare(_heat, 0, coldHard, CmpType.EQ);
                         Cv2.BitwiseAnd(bg, coldHard, coldHard);
+                        Cv2.InRange(_heat, new Scalar(1), new Scalar(cooldown - 1), softBand);
 
-                        // Freshly-revealed background (visible now, not yet known) is SEEDED at
-                        // full value, blending it up from black would copy near-black for many
-                        // frames, but only where fully cold. Already-known background blends
-                        // toward the frame at coldW*LearnRate per pixel (soft edge).
                         using (var knownBefore = _known.Clone())
                         using (var fresh = new Mat())
-                        using (var wr3 = new Mat())    // per-pixel learn rate, CV_32FC3
-                        using (var bgF = new Mat())
-                        using (var frF = new Mat())
                         using (var blended = new Mat())
                         {
-                            coldW.ConvertTo(coldW, MatType.CV_32FC1, LearnRate);         // coldW*LearnRate
-                            Cv2.CvtColor(coldW, wr3, ColorConversionCodes.GRAY2BGR);
-                            _bg.ConvertTo(bgF, MatType.CV_32FC3);
-                            frame.ConvertTo(frF, MatType.CV_32FC3);
-                            Cv2.Subtract(frF, bgF, frF);        // blended = bgF + (frF-bgF)*wr3
-                            Cv2.Multiply(frF, wr3, frF);
-                            Cv2.Add(bgF, frF, blended);
-                            blended.ConvertTo(blended, _bg.Type());
-                            blended.CopyTo(_bg, knownBefore);   // only smooth already-known pixels
+                            if (Cv2.CountNonZero(softBand) == 0)
+                            {
+                                // Quiet scene: heat is binary (0 or full cooldown), so the
+                                // soft per-pixel ramp in the else branch degenerates to a
+                                // constant LearnRate on fully-cold background and 0
+                                // everywhere else. One SIMD 8-bit AddWeighted + masked
+                                // copy is exact and ~4x cheaper than the float path; this
+                                // is the steady state whenever nothing has moved for a
+                                // full cooldown.
+                                using (var learnMask = new Mat())
+                                {
+                                    Cv2.AddWeighted(frame, LearnRate, _bg, 1 - LearnRate, 0, blended);
+                                    Cv2.BitwiseAnd(knownBefore, coldHard, learnMask);
+                                    blended.CopyTo(_bg, learnMask);
+                                }
+                            }
+                            else
+                            {
+                                // Soft motion gate. coldW in [0,1] is per-pixel "coldness": 1 where
+                                // fully cold (heat 0 ⇒ learn at full rate), 0 where fully hot, ramping
+                                // across the heat's soft edge, gated to background (no person) pixels.
+                                // Scaling the learn rate by it fades the plate in across the boundary
+                                // instead of switching it on at a hard ring.
+                                using (var coldW = new Mat())  // CV_32F, background-gated coldness
+                                using (var wr3 = new Mat())    // per-pixel learn rate, CV_32FC3
+                                using (var bgF = new Mat())
+                                using (var frF = new Mat())
+                                {
+                                    _heat.ConvertTo(coldW, MatType.CV_32FC1, -1.0 / cooldown, 1.0);   // 1..0
+                                    using (var bgf = new Mat())
+                                    {
+                                        bg.ConvertTo(bgf, MatType.CV_32FC1, 1.0 / 255.0);            // background 0/1
+                                        Cv2.Multiply(coldW, bgf, coldW);
+                                    }
+                                    coldW.ConvertTo(coldW, MatType.CV_32FC1, LearnRate);         // coldW*LearnRate
+                                    Cv2.CvtColor(coldW, wr3, ColorConversionCodes.GRAY2BGR);
+                                    _bg.ConvertTo(bgF, MatType.CV_32FC3);
+                                    frame.ConvertTo(frF, MatType.CV_32FC3);
+                                    Cv2.Subtract(frF, bgF, frF);        // blended = bgF + (frF-bgF)*wr3
+                                    Cv2.Multiply(frF, wr3, frF);
+                                    Cv2.Add(bgF, frF, blended);
+                                    blended.ConvertTo(blended, _bg.Type());
+                                }
+                                blended.CopyTo(_bg, knownBefore);   // only smooth already-known pixels
+                            }
 
+                            // Freshly-revealed background (visible now, not yet known) is
+                            // SEEDED at full value, blending it up from black would copy
+                            // near-black for many frames, but only where fully cold.
                             Cv2.BitwiseNot(knownBefore, fresh);
                             Cv2.BitwiseAnd(fresh, coldHard, fresh);
                             frame.CopyTo(_bg, fresh);           // seed fresh, fully-cold pixels
@@ -222,6 +261,22 @@ namespace VeBeGe
         public void CompositeForeground(Mat clean, Mat frame)
         {
             if (_fgMask == null) return;
+            // Alpha is zero outside the mask + feather bleed, so the float blend
+            // only needs the mask's bounding box (plus a feather margin), not the
+            // whole frame. Filters on a sub-Mat still read real parent pixels at
+            // the ROI edge, so the result is identical to the full-frame blend.
+            Rect roi = Cv2.BoundingRect(_fgMask);
+            if (roi.Width <= 0 || roi.Height <= 0) return;   // no subject: frame is all background
+            roi = Rect.Inflate(roi, FeatherKernel, FeatherKernel)
+                  & new Rect(0, 0, frame.Width, frame.Height);
+            using (var fgRoi = new Mat(_fgMask, roi))
+            using (var cleanRoi = new Mat(clean, roi))
+            using (var frameRoi = new Mat(frame, roi))
+                CompositeRoi(fgRoi, cleanRoi, frameRoi);
+        }
+
+        private static void CompositeRoi(Mat fgMask, Mat clean, Mat frame)
+        {
             using (var alpha = new Mat())
             using (var inv = new Mat())
             using (var af = new Mat())
@@ -229,7 +284,7 @@ namespace VeBeGe
             using (var cf = new Mat())
             using (var ff = new Mat())
             {
-                Cv2.GaussianBlur(_fgMask, alpha, new Size(FeatherKernel, FeatherKernel), 0);
+                Cv2.GaussianBlur(fgMask, alpha, new Size(FeatherKernel, FeatherKernel), 0);
                 Cv2.BitwiseNot(alpha, inv);                               // 255 - alpha, so af + invf = 1
 
                 Cv2.CvtColor(alpha, af, ColorConversionCodes.GRAY2BGR);
@@ -288,10 +343,8 @@ namespace VeBeGe
                 // sources real background.
                 if (_fgMask != null && _fgMask.Size() == frame.Size())
                     using (var fgHalo = new Mat())
-                    using (var k = Cv2.GetStructuringElement(MorphShapes.Ellipse,
-                               new Size(SubjectPad(frame.Width) * 2 + 1, SubjectPad(frame.Width) * 2 + 1)))
                     {
-                        Cv2.Dilate(_fgMask, fgHalo, k);
+                        DilateFast(_fgMask, fgHalo, SubjectPad(frame.Width));
                         Cv2.Subtract(holes, fgHalo, holes);   // holes AND NOT (subject + halo)
                     }
                 int n = Cv2.CountNonZero(holes);
@@ -301,12 +354,24 @@ namespace VeBeGe
                 // the live frame instead.
                 // ponytail: fraction guard as a cheap proxy for "enough known border".
                 if (n > frame.Total() * 0.5) return;
-                // ponytail: Cv2.Inpaint is exactly "interpolate the masked region from
-                // its borders inward". Full-res every frame; downscale if it ever costs
-                // too much.
+                // Cv2.Inpaint is exactly "interpolate the masked region from its
+                // borders inward", but full-res Telea cost scales with hole area
+                // (300+ ms on a 720p walker). The fill is a low-frequency smear by
+                // design, so inpaint downscaled and upscale the result; visually
+                // identical. Holes are dilated 2 px at small scale so the seed
+                // border never samples mover pixels mixed in by the downscale.
+                using (var smallFrame = new Mat())
+                using (var smallHoles = new Mat())
+                using (var smallFilled = new Mat())
                 using (var filled = new Mat())
                 {
-                    Cv2.Inpaint(frame, holes, filled, 3, InpaintMethod.Telea);
+                    var ss = new Size(320, Math.Max(2, frame.Rows * 320 / frame.Cols));
+                    Cv2.Resize(frame, smallFrame, ss, 0, 0, InterpolationFlags.Area);
+                    Cv2.Resize(holes, smallHoles, ss, 0, 0, InterpolationFlags.Nearest);
+                    using (var k = Cv2.GetStructuringElement(MorphShapes.Ellipse, new Size(5, 5)))
+                        Cv2.Dilate(smallHoles, smallHoles, k);
+                    Cv2.Inpaint(smallFrame, smallHoles, smallFilled, 3, InpaintMethod.Telea);
+                    Cv2.Resize(smallFilled, filled, frame.Size(), 0, 0, InterpolationFlags.Linear);
                     filled.CopyTo(frame, holes);
                 }
             }
@@ -330,12 +395,16 @@ namespace VeBeGe
         // people keep their heat, nothing false-ignites.
         private bool UpdateHeat(Mat frame, IReadOnlyList<Rect> people)
         {
+            LastHeatStages.Clear();
+            _heatSw.Restart();
+            _heatLast = 0;
             bool cameraEvent = false;
             int cooldown = Math.Max(1, Math.Min(255, HeatCooldownFrames));
             using (var gray = new Mat())
             {
                 Cv2.CvtColor(frame, gray, ColorConversionCodes.BGR2GRAY);
                 Cv2.GaussianBlur(gray, gray, new Size(5, 5), 0);   // denoise: steadier flow
+                HeatMark("h_gray");
                 if (_heat == null || _heat.Size() != gray.Size())
                 {
                     _heat?.Dispose();
@@ -354,8 +423,10 @@ namespace VeBeGe
                         using (var motion = new Mat())
                         {
                             cameraEvent = !FlowIgnite(curSmall, _prevSmall, allowedSmall, scale, motionSmall);
+                            HeatMark("h_flow1");
                             if (!cameraEvent && _oldSmall != null)
                                 FlowIgnite(curSmall, _oldSmall, allowedSmall, scale, motionSmall);
+                            HeatMark("h_flow2");
                             if (!cameraEvent)
                             {
                                 // Border flow is unreliable; lone specks are noise.
@@ -376,24 +447,24 @@ namespace VeBeGe
                                 // live, and learns into the plate.
                                 if (_fgMask != null && _fgMask.Size() == motion.Size())
                                     using (var fgHalo = new Mat())
-                                    using (var kh = Cv2.GetStructuringElement(MorphShapes.Ellipse,
-                                               new Size(SubjectPad(motion.Width) * 2 + 1, SubjectPad(motion.Width) * 2 + 1)))
                                     {
-                                        Cv2.Dilate(_fgMask, fgHalo, kh);
+                                        // Union of both masks first: one downscaled
+                                        // dilate instead of two.
                                         if (_prevFgMask != null && _prevFgMask.Size() == motion.Size())
-                                            using (var prevHalo = new Mat())
-                                            {
-                                                Cv2.Dilate(_prevFgMask, prevHalo, kh);
-                                                Cv2.BitwiseOr(fgHalo, prevHalo, fgHalo);
-                                            }
+                                            Cv2.BitwiseOr(_fgMask, _prevFgMask, fgHalo);
+                                        else
+                                            _fgMask.CopyTo(fgHalo);
+                                        DilateFast(fgHalo, fgHalo, SubjectPad(motion.Width));
                                         motion.SetTo(Scalar.All(0), fgHalo);
                                     }
                                 cameraEvent = Cv2.CountNonZero(motion) > gray.Total() * GlobalMotionFraction;
+                                HeatMark("h_post");
                                 if (!cameraEvent)
                                 {
                                     using (var k3 = Cv2.GetStructuringElement(MorphShapes.Ellipse, new Size(3, 3)))
                                         Cv2.Dilate(_heat, _heat, k3);            // smear: heat flows 1 px/frame
                                     Cv2.Subtract(_heat, Scalar.All(1), _heat);   // cool one frame (floors at 0)
+                                    HeatMark("h_cool");
                                     // Soft ignition: instead of a hard-edged disc of full
                                     // cooldown, ramp the heat DOWN from full at the motion
                                     // to 0 at HeatSpread px away (distance transform). The
@@ -417,6 +488,7 @@ namespace VeBeGe
                                             motion.ConvertTo(ignite, MatType.CV_8UC1, cooldown / 255.0);
                                         Cv2.Max(_heat, ignite, _heat);           // re-ignite (soft)
                                     }
+                                    HeatMark("h_ignite");
                                 }
                             }
                         }
@@ -467,6 +539,33 @@ namespace VeBeGe
         // (tuned for real background motion) is nowhere near enough. Scales with
         // resolution; independent of HeatSpread.
         private static int SubjectPad(int cols) => Math.Max(24, cols / 20);
+
+        // Large-radius dilate, downscaled. An exact ellipse dilate is O(r²) per
+        // pixel; at SubjectPad radius on 720p it was ~100 ms per call and
+        // dominated the whole frame. The halo is a safety margin, so run it at
+        // DownW width with the radius rounded UP (never a smaller halo than
+        // asked) and nearest-neighbour edges. dst may alias src.
+        private static void DilateFast(Mat src, Mat dst, int radius)
+        {
+            const int DownW = 320;
+            if (src.Cols <= DownW * 2)
+            {
+                using (var k = Cv2.GetStructuringElement(MorphShapes.Ellipse,
+                           new Size(radius * 2 + 1, radius * 2 + 1)))
+                    Cv2.Dilate(src, dst, k);
+                return;
+            }
+            double f = src.Cols / (double)DownW;
+            int r = (int)Math.Ceiling(radius / f) + 1;
+            using (var small = new Mat())
+            {
+                Cv2.Resize(src, small, new Size(DownW, Math.Max(2, (int)Math.Round(src.Rows / f))),
+                           0, 0, InterpolationFlags.Nearest);
+                using (var k = Cv2.GetStructuringElement(MorphShapes.Ellipse, new Size(r * 2 + 1, r * 2 + 1)))
+                    Cv2.Dilate(small, small, k);
+                Cv2.Resize(small, dst, src.Size(), 0, 0, InterpolationFlags.Nearest);
+            }
+        }
 
         // Aspect-preserving downscale used for drift estimation.
         private static Size SmallSize(Mat gray) =>

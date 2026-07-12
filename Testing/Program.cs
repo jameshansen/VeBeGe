@@ -22,7 +22,10 @@ namespace VeBeGe.Testing
         {
             if (args.Length < 1)
             {
-                Console.Error.WriteLine("Usage: vebege_testing <input.mp4> [loops=2] [outputDir]");
+                Console.Error.WriteLine("Usage: vebege_testing <input.mp4> [loops=2] [outputDir] [maxSeconds=0] [rt]");
+                Console.Error.WriteLine("  maxSeconds: only process the first N seconds of the clip (0 = all).");
+                Console.Error.WriteLine("  rt        : simulate real time, drop the frames a live camera would");
+                Console.Error.WriteLine("              have delivered while processing was busy.");
                 return 2;
             }
 
@@ -35,6 +38,14 @@ namespace VeBeGe.Testing
                 Console.Error.WriteLine("loops must be a positive integer.");
                 return 2;
             }
+
+            double maxSeconds = 0;
+            if (args.Length >= 4 && (!double.TryParse(args[3], out maxSeconds) || maxSeconds < 0))
+            {
+                Console.Error.WriteLine("maxSeconds must be a non-negative number.");
+                return 2;
+            }
+            bool realtime = args.Length >= 5 && args[4].Equals("rt", StringComparison.OrdinalIgnoreCase);
 
             string outDir = args.Length >= 3 ? args[2] : Path.GetDirectoryName(input);
             if (string.IsNullOrEmpty(outDir)) outDir = Directory.GetCurrentDirectory();
@@ -70,7 +81,9 @@ namespace VeBeGe.Testing
             int fourcc = VideoWriter.FourCC('m', 'p', '4', 'v');
 
             Console.WriteLine($"Input : {input}");
-            Console.WriteLine($"Video : {width}x{height} @ {fps:0.##}fps, looping {loops}x");
+            Console.WriteLine($"Video : {width}x{height} @ {fps:0.##}fps, looping {loops}x"
+                              + (maxSeconds > 0 ? $", first {maxSeconds:0.#}s only" : "")
+                              + (realtime ? ", REALTIME (drops frames while busy)" : ""));
             Console.WriteLine($"Filter: pad={pad}, bodyScale={bodyScale}, stayFrames={stayFrames}");
             Console.WriteLine($"Heat  : minFlow={Config.HeatMinFlow}px, spread={Config.HeatSpread}px, cooldown={heatCooldownFrames} frames");
 
@@ -94,7 +107,9 @@ namespace VeBeGe.Testing
                     return 1;
                 }
 
-                long total = 0;
+                long total = 0, dropped = 0;
+                int maxFrames = maxSeconds > 0 ? (int)Math.Round(maxSeconds * fps) : int.MaxValue;
+                double frameMs = 1000.0 / fps;
                 using (var maskBgr = new Mat())
                 using (var heatVis = new Mat())
                 using (var heatBgr = new Mat())
@@ -109,11 +124,27 @@ namespace VeBeGe.Testing
                         using (var frame = new Mat())
                         {
                             var sw = new Stopwatch();
-                            while (cap.Read(frame) && !frame.Empty())
+                            int read = 0;      // frames consumed from the clip this pass
+                            double owed = 0;   // fractional frames a live camera delivered while busy
+                            while (read < maxFrames && cap.Read(frame) && !frame.Empty())
                             {
+                                read++;
                                 sw.Restart();
                                 filter.Process(frame, pad, stayFrames, bodyScale);
-                                perf.Record(sw.Elapsed.TotalMilliseconds);
+                                double ms = sw.Elapsed.TotalMilliseconds;
+                                perf.Record(ms, filter.LastStageMs);
+                                if (realtime)
+                                {
+                                    // While Process ran, the "camera" delivered ms/frameMs
+                                    // frames; this one was consumed, the rest are dropped
+                                    // unseen, exactly like grabbing latest-frame from a
+                                    // live device.
+                                    owed += ms / frameMs - 1;
+                                    while (owed >= 1 && read < maxFrames && cap.Grab())
+                                    {
+                                        owed -= 1; dropped++; read++;
+                                    }
+                                }
                                 wProc.Write(frame);
 
                                 Mat mask = filter.ForegroundMask;
@@ -146,7 +177,16 @@ namespace VeBeGe.Testing
                                 total++;
                             }
                         }
-                        Console.WriteLine($"  pass {pass}/{loops} done, {total} frames written");
+                        Console.WriteLine($"  pass {pass}/{loops} done, {total} frames written"
+                                          + (realtime ? $", {dropped} dropped so far" : ""));
+                    }
+                    if (realtime)
+                    {
+                        long delivered = total + dropped;
+                        string s = string.Format("realtime: processed {0} of {1} delivered frames, dropped {2} ({3:0.0}%)",
+                            total, delivered, dropped, delivered > 0 ? 100.0 * dropped / delivered : 0);
+                        perf.Note(s);
+                        Console.WriteLine(s);
                     }
                 }
             }
