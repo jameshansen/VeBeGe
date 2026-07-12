@@ -48,16 +48,19 @@ namespace VeBeGe
         [STAThread]   // WinForms message loop (tray icon) needs an STA thread
         private static void Main(string[] args)
         {
+            // Uninstaller cleanup entry point. Handled BEFORE the single-instance
+            // mutex on purpose: during uninstall the resident service still holds
+            // the mutex, so gating this on `first` would silently skip the cleanup.
+            if (args.Any(a => a.Equals("-unregister", StringComparison.OrdinalIgnoreCase)))
+            {
+                UnregisterAllCams();
+                Log.Write("All virtual cameras unregistered.");
+                return;
+            }
+
             using (var mutex = new Mutex(true, "VeBeGe.Service.SingleInstance", out bool first))
             {
                 if (!first) return;   // already running
-
-                if (args.Any(a => a.Equals("-unregister", StringComparison.OrdinalIgnoreCase)))
-                {
-                    for (int s = 0; s < MaxSlots; s++) DriverRegistrar.Unregister(s);
-                    Log.Write("All virtual cameras unregistered.");
-                    return;
-                }
 
                 Log.Write("VeBeGe service starting");
                 Stage();
@@ -65,7 +68,7 @@ namespace VeBeGe
                 CleanupRunKeys();
                 SetDllDirectory(Config.Dir);   // resolve vebege_cam.dll + OpenCV natives from ProgramData
 
-                AppDomain.CurrentDomain.ProcessExit += (s, e) => StopAllPumps();
+                AppDomain.CurrentDomain.ProcessExit += (s, e) => Cleanup();
 
                 // Camera work runs off the UI thread; the main thread owns the
                 // tray icon's message loop and blocks in Application.Run.
@@ -76,7 +79,7 @@ namespace VeBeGe
                 using (new Tray())
                     System.Windows.Forms.Application.Run();
 
-                StopAllPumps();
+                Cleanup();
             }
         }
 
@@ -228,6 +231,24 @@ namespace VeBeGe
         {
             foreach (var p in Pumps.Values) { try { p.Dispose(); } catch { } }
             Pumps.Clear();
+        }
+
+        /// Remove every slot's DirectShow registration from HKCU so no dead
+        /// "(VeBeGe)" cameras linger in device pickers after we're gone.
+        private static void UnregisterAllCams()
+        {
+            for (int s = 0; s < MaxSlots; s++) DriverRegistrar.Unregister(s);
+        }
+
+        /// Full teardown on exit: stop the pumps and drop all virtual cameras.
+        /// Idempotent, so it's safe from both ProcessExit and the normal return.
+        /// ponytail: best-effort on graceful exit/logoff/shutdown; a hard kill
+        /// (TerminateProcess) skips this, but the next launch's Reconcile drops
+        /// any orphaned slots, so nothing accumulates.
+        private static void Cleanup()
+        {
+            StopAllPumps();
+            UnregisterAllCams();
         }
     }
 }

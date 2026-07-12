@@ -163,7 +163,14 @@ $comps
     </Feature>
     <!-- Launch the app when install finishes; its first run opens the setup page. -->
     <CustomAction Id="LaunchApp" FileRef="$exeId" ExeCommand="" Return="asyncNoWait" Impersonate="yes" />
+    <!-- On uninstall, strip the "(VeBeGe)" virtual cameras the app registered at
+         runtime under HKCU\Software\Classes. The MSI never wrote those keys, so
+         it won't remove them; this runs the exe (still on disk, Before RemoveFiles,
+         after Restart Manager has closed the resident instance) to clean them out.
+         Skipped on major upgrade, the incoming version re-registers on launch. -->
+    <CustomAction Id="UnregisterCams" FileRef="$exeId" ExeCommand="-unregister" Return="ignore" Impersonate="yes" />
     <InstallExecuteSequence>
+      <Custom Action="UnregisterCams" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="LaunchApp" After="InstallFinalize" Condition="NOT Installed" />
     </InstallExecuteSequence>
   </Package>
