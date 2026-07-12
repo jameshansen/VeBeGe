@@ -8,6 +8,7 @@ bin/
 *.suo
 .vs/
 msix/staging/
+msix/identity.local.ps1
 *.msix
 Installer/
 Testing/out

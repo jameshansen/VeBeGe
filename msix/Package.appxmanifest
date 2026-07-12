@@ -3,8 +3,10 @@
   VeBeGe MSIX manifest (full-trust desktop app).
 
   Store notes:
-    - Identity Name/Publisher below are placeholders; Partner Center assigns
-      the real values when the app is reserved (replace before submission).
+    - Identity Name/Publisher and PublisherDisplayName below are PLACEHOLDERS.
+      build-msix.ps1 injects the real Partner Center values from the git-ignored
+      msix\identity.local.ps1 (see identity.local.ps1.example). Version's 4th
+      part must stay 0; the Store reserves the revision number.
     - unvirtualizedResources is a restricted capability: VeBeGe must write
       the real HKCU\Software\Classes (so other apps' DirectShow enumeration
       sees the virtual cameras) and the real %ProgramData%\VeBeGe (the
@@ -19,14 +21,14 @@
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   IgnorableNamespaces="uap desktop desktop6 rescap">
 
-  <Identity Name="VeBeGe"
-            Publisher="CN=VeBeGe"
+  <Identity Name="PLACEHOLDER.Name"
+            Publisher="CN=PLACEHOLDER"
             Version="1.0.0.0"
             ProcessorArchitecture="x64" />
 
   <Properties>
     <DisplayName>VeBeGe</DisplayName>
-    <PublisherDisplayName>VeBeGe</PublisherDisplayName>
+    <PublisherDisplayName>PLACEHOLDER</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
     <!-- Writes must land in the REAL registry/filesystem: other processes
          (Zoom, Chrome, OBS...) have to see the camera registrations and load

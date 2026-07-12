@@ -1,0 +1,9 @@
+# Copy to identity.local.ps1 (git-ignored) and fill in the values from
+# Partner Center -> your app -> Product management -> Product identity.
+@{
+    Name                 = 'publisher.AppName'
+    Publisher            = 'CN=00000000-0000-0000-0000-000000000000'
+    PublisherDisplayName = 'publisher'
+    # Generate once (e.g. [guid]::NewGuid()) and never change it.
+    MsiUpgradeCode       = '00000000-0000-0000-0000-000000000000'
+}

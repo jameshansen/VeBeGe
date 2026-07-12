@@ -84,9 +84,20 @@ try {
 } finally { $srcImg.Dispose() }
 
 # --- MSIX -------------------------------------------------------------------
-# Stamp the version from version.txt into the Identity, then pack.
+# Real Store identity lives in the git-ignored identity.local.ps1 (the manifest
+# ships with PLACEHOLDER values). Load it and stamp identity + version, then pack.
+$idFile = Join-Path $root 'msix\identity.local.ps1'
+if (-not (Test-Path $idFile)) { throw "Missing $idFile - copy identity.local.ps1.example and fill in the Partner Center values." }
+$id = & $idFile
+foreach ($k in 'Name','Publisher','PublisherDisplayName') {
+    if ([string]::IsNullOrWhiteSpace($id.$k)) { throw "identity.local.ps1 is missing '$k'." }
+}
+
 $manifest = Get-Content (Join-Path $root 'msix\Package.appxmanifest') -Raw
+$manifest = [regex]::Replace($manifest, '(<Identity\b[^>]*?\bName=")[^"]*(")', "`${1}$($id.Name)`$2")
+$manifest = [regex]::Replace($manifest, '(<Identity\b[^>]*?\bPublisher=")[^"]*(")', "`${1}$($id.Publisher)`$2")
 $manifest = [regex]::Replace($manifest, '(<Identity\b[^>]*?\bVersion=")[^"]*(")', "`${1}$version`$2")
+$manifest = [regex]::Replace($manifest, '(<PublisherDisplayName>)[^<]*(</PublisherDisplayName>)', "`${1}$($id.PublisherDisplayName)`$2")
 Set-Content -Path (Join-Path $staging 'AppxManifest.xml') -Value $manifest -Encoding UTF8
 
 # Find makeappx in the newest installed Windows 10/11 SDK.
@@ -134,8 +145,9 @@ foreach ($f in $payload) {
 "@
 }
 
-# UpgradeCode: constant identity of the product across versions. Do not change.
-$upgradeCode = '7E9B2C41-9C2A-4E4E-9A9E-2B0F1C3D4E5A'
+# UpgradeCode: constant identity of the product across versions (git-ignored).
+$upgradeCode = $id.MsiUpgradeCode
+if ([string]::IsNullOrWhiteSpace($upgradeCode)) { throw "identity.local.ps1 is missing 'MsiUpgradeCode'." }
 $wxs = @"
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package Name="VeBeGe" Manufacturer="VeBeGe" Version="$version" UpgradeCode="$upgradeCode" Scope="perUser" Compressed="yes">
