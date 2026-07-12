@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using OpenCvSharp;
 using VeBeGe;
@@ -59,6 +60,7 @@ namespace VeBeGe.Testing
             string pBg        = Path.Combine(outDir, stem + "_background.mp4");
             string pHeat      = Path.Combine(outDir, stem + "_heat.mp4");
             string pTier2     = Path.Combine(outDir, stem + "_tier2_background.mp4");
+            string pPerf      = Path.Combine(outDir, stem + "_perf.log");
 
             // Reuse the service's real filter tuning (ini defaults if unset).
             int pad = Config.Padding;
@@ -79,6 +81,7 @@ namespace VeBeGe.Testing
                        HeatCooldownFrames = heatCooldownFrames,
                        MaskHoldFrames = (int)Math.Round(Config.MaskHoldSeconds * fps),
                    })
+            using (var perf = new PerfLog(pPerf, $"mp4: {stem} @ {width}x{height}, {loops}x loop"))
             using (var wProc = new VideoWriter(pProcessed, fourcc, fps, size))
             using (var wMask = new VideoWriter(pMask, fourcc, fps, size))
             using (var wBg   = new VideoWriter(pBg, fourcc, fps, size))
@@ -105,9 +108,12 @@ namespace VeBeGe.Testing
                         using (var cap = new VideoCapture(input))
                         using (var frame = new Mat())
                         {
+                            var sw = new Stopwatch();
                             while (cap.Read(frame) && !frame.Empty())
                             {
+                                sw.Restart();
                                 filter.Process(frame, pad, stayFrames, bodyScale);
+                                perf.Record(sw.Elapsed.TotalMilliseconds);
                                 wProc.Write(frame);
 
                                 Mat mask = filter.ForegroundMask;
@@ -151,6 +157,7 @@ namespace VeBeGe.Testing
             Console.WriteLine("  " + pBg);
             Console.WriteLine("  " + pHeat);
             Console.WriteLine("  " + pTier2);
+            Console.WriteLine("  " + pPerf);
             return 0;
         }
     }

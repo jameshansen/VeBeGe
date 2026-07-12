@@ -4,10 +4,11 @@
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
-    <ProjectGuid>{C3D40001-0002-4B01-8E01-000000000012}</ProjectGuid>
+    <ProjectGuid>{C3D40001-0003-4B01-8E01-000000000013}</ProjectGuid>
     <OutputType>Exe</OutputType>
     <RootNamespace>VeBeGe.Testing</RootNamespace>
-    <AssemblyName>vebege_testing</AssemblyName>
+    <AssemblyName>vebege_live</AssemblyName>
+    <StartupObject>VeBeGe.Testing.LiveProgram</StartupObject>
     <TargetFrameworkVersion>v4.8.1</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
@@ -41,7 +42,7 @@
     <Reference Include="System.Core" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="Program.cs" />
+    <Compile Include="LiveProgram.cs" />
     <Compile Include="PerfLog.cs" />
   </ItemGroup>
   <ItemGroup>
@@ -53,7 +54,7 @@
   </ItemGroup>
   <ItemGroup>
     <!-- Models + OpenCV natives beside the exe: the filter loads models from the
-         exe folder, and mp4 read/write needs the ffmpeg backend dll. -->
+         exe folder, and live capture/display needs the native OpenCV backend. -->
     <Content Include="..\vebege_service\face_detection_yunet_2023mar.onnx">
       <Link>face_detection_yunet_2023mar.onnx</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
