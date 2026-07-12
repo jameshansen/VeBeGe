@@ -64,8 +64,11 @@ You can see all four layers side by side on the [website](https://vebege.io/#how
 
 ## Download & setup
 
-Grab it from **[vebege.io](https://vebege.io/)**, which also has a full setup
-guide and a live demo.
+Download the unsigned MSI from the
+**[latest GitHub release](https://github.com/jameshansen/VeBeGe/releases/latest)**.
+A signed version is coming soon on the **Microsoft Store**, pending approval.
+
+**[vebege.io](https://vebege.io/)** also has a full setup guide and a live demo.
 
 ## Who made it
 
@@ -75,3 +78,17 @@ VeBeGe is made by **James Hansen**, [jameshansen.ai](https://jameshansen.ai) ·
 background-removal idea was first built, see that repo for more of the
 development history. It's free; feedback and ideas are genuinely welcome through
 the contact form on the site.
+
+## Special Thanks
+
+The virtual camera is built on [softcam](https://github.com/tshino/softcam) by
+tshino (MIT licensed), the DirectShow virtual-camera base VeBeGe's driver is
+forked from.
+
+The [YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet)
+face-detection model (Shiqi Yu et al.), distributed via the OpenCV Zoo, used to
+spot people in the frame.
+
+The [PP-HumanSeg](https://github.com/opencv/opencv_zoo/tree/main/models/human_segmentation_pphumanseg)
+human-segmentation model (PaddlePaddle / Baidu), distributed via the OpenCV Zoo,
+used for the foreground/background mask.
