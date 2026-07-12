@@ -132,15 +132,15 @@ if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
 $exeId = 'f_vebege_service_exe'
 $comps = ''
 foreach ($f in $payload) {
-    $id  = 'f_' + ($f -replace '[^A-Za-z0-9_]', '_')
+    $fid = 'f_' + ($f -replace '[^A-Za-z0-9_]', '_')
     $src = Join-Path $release $f
     $run = ''
     if ($f -eq 'vebege_service.exe') {
-        $run = "`n        <RegistryValue Root=`"HKCU`" Key=`"Software\Microsoft\Windows\CurrentVersion\Run`" Name=`"VeBeGe`" Type=`"string`" Value=`"[#$id]`" />"
+        $run = "`n        <RegistryValue Root=`"HKCU`" Key=`"Software\Microsoft\Windows\CurrentVersion\Run`" Name=`"VeBeGe`" Type=`"string`" Value=`"[#$fid]`" />"
     }
     $comps += @"
       <Component Directory="INSTALLFOLDER">
-        <File Id="$id" Source="$src" KeyPath="yes" />$run
+        <File Id="$fid" Source="$src" KeyPath="yes" />$run
       </Component>
 "@
 }
