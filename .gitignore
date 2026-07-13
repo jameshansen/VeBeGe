@@ -15,5 +15,10 @@ nuget.exe
 INTERNAL-README.md
 INTERNAL-MOTION.md
 INTERNAL-BACKGROUND.md
+INTERNAL-OPTIMIZATION.md
+CLAUDE.md
 Testing/in_ikea
 Testing/out_ikea
+Testing/in_bbc
+Testing/out_bbc
+Testing/*_perf.log

@@ -51,6 +51,7 @@ namespace VeBeGe.Testing
                            HeatSpread = Config.HeatSpread,
                            HeatCooldownFrames = heatCooldownFrames,
                            MaskHoldFrames = (int)Math.Round(Config.MaskHoldSeconds * fps),
+                           QuietShieldFrames = (int)Math.Round(Config.QuietShieldSeconds * fps),
                        })
                 using (var perf = new PerfLog(perfPath, $"live: [{index}] {cams.Find(c => c.Index == index)?.Name} @ {Config.Width}x{Config.Height}", echoToConsole: true))
                 using (var frame = new Mat())
@@ -84,6 +85,9 @@ namespace VeBeGe.Testing
                         {
                             heat.ConvertTo(heatVis, MatType.CV_8UC1, 255.0 / Math.Max(1, Math.Min(255, heatCooldownFrames)));
                             Cv2.ApplyColorMap(heatVis, heatBgr, ColormapTypes.Jet);
+                            // Green = body regions actively shielding this frame.
+                            foreach (var r in filter.LastPeople)
+                                Cv2.Rectangle(heatBgr, r, new Scalar(0, 255, 0), 2);
                             Cv2.ImShow("heat", heatBgr);
                         }
 

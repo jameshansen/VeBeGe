@@ -99,6 +99,7 @@ namespace VeBeGe
                                     HeatSpread = Config.HeatSpread,
                                     HeatCooldownFrames = (int)Math.Round(Config.HeatCooldownSeconds * fps),
                                     MaskHoldFrames = (int)Math.Round(Config.MaskHoldSeconds * fps),
+                                    QuietShieldFrames = (int)Math.Round(Config.QuietShieldSeconds * fps),
                                 };
                             }
                             catch (Exception ex)

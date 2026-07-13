@@ -66,6 +66,18 @@ namespace VeBeGe
         /// background model: frames to reuse the last good subject mask.
         public int MaskHoldFrames { get => _vbm.MaskHoldFrames; set => _vbm.MaskHoldFrames = value; }
 
+        /// Quiet-shield expiry (ini [Filter] QuietShieldSeconds): a tracked face
+        /// whose whole body region has shown zero true motion for this many
+        /// frames is static scenery the detector keeps false-matching (wall art,
+        /// posters), not a person. It stops shielding so the area can cool,
+        /// learn, and heal from tier-two blur to the real tier-one plate. Any
+        /// motion in the region re-arms the shield instantly. 0 = never expire.
+        public int QuietShieldFrames { get; set; } = 300;
+
+        /// The body regions that shielded the background this frame (diagnostic:
+        /// the Testing tools draw them onto the heat view).
+        public IReadOnlyList<Rect> LastPeople { get; private set; } = new Rect[0];
+
         /// Both models must be present (the service stages them into
         /// %ProgramData%\VeBeGe); throws with a clear message if not.
         public VbgFilter(string modelDir)
@@ -109,12 +121,33 @@ namespace VeBeGe
                     _lastDetections = detections;
                 }
                 else detections = _lastDetections;
+                // Segmentation can lag a frame when the user moves fast, leaving
+                // their face uncovered in the cutout; detected, it would become a
+                // phantom "background person" whose body region blurs most of
+                // the frame. A face right on top of (or beside) the subject's
+                // mask is that phantom, not a background person, drop it. Anyone
+                // real standing that close to the subject is still covered by
+                // the motion heatmap.
+                var kept = new List<Rect>();
+                foreach (var d in detections)
+                    if (!_vbm.NearSubject(d)) kept.Add(d);
                 Mark("detect");
 
                 _tracker.MaxAge = Math.Max(0, stayFrames);
                 var people = new List<Rect>();
-                foreach (var box in _tracker.Update(detections))
-                    people.Add(BodyRegion(box, frame.Size(), bodyScale));
+                foreach (var t in _tracker.Update(kept))
+                {
+                    Rect body = BodyRegion(t.Box, frame.Size(), bodyScale);
+                    // Quiet-shield expiry: real people always produce flow motion
+                    // somewhere in their body region; static scenery the detector
+                    // false-fires on (wall art) never does. Without this, a false
+                    // face re-shields its column at full heat every frame forever,
+                    // so the area can never learn and stays tier-two blurred.
+                    t.Quiet = _vbm.HasRecentMotion(body) ? 0 : t.Quiet + 1;
+                    if (QuietShieldFrames <= 0 || t.Quiet < QuietShieldFrames)
+                        people.Add(body);
+                }
+                LastPeople = people;
 
                 // Learn the scene where nobody is, replace the whole background
                 // with the learned plate (unlearned areas keep the live frame),

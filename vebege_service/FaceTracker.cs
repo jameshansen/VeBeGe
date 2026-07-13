@@ -12,10 +12,11 @@ namespace VeBeGe
     /// (JustShowMe's appearance-embedding fallback is gone with recognition.)
     internal sealed class FaceTracker
     {
-        private sealed class Track
+        public sealed class Track
         {
             public Rect Box;
-            public int Age; // frames since last detection (0 = seen this frame)
+            public int Age;   // frames since last detection (0 = seen this frame)
+            public int Quiet; // frames since motion corroborated this track (caller-maintained)
         }
 
         private readonly List<Track> _tracks = new List<Track>();
@@ -31,9 +32,10 @@ namespace VeBeGe
             MaxAge = maxAge;
         }
 
-        /// Feeds this frame's detections in; returns every active track's box,
-        /// including recently-lost ones within the staytime window.
-        public IReadOnlyList<Rect> Update(IReadOnlyList<Rect> detections)
+        /// Feeds this frame's detections in; returns every active track,
+        /// including recently-lost ones within the staytime window. Tracks are
+        /// live objects: the caller may maintain Quiet across frames.
+        public IReadOnlyList<Track> Update(IReadOnlyList<Rect> detections)
         {
             foreach (var t in _tracks) t.Age++;
 
@@ -66,10 +68,7 @@ namespace VeBeGe
                 _tracks.Add(new Track { Box = box, Age = 0 });
 
             _tracks.RemoveAll(t => t.Age > MaxAge);
-
-            var active = new List<Rect>(_tracks.Count);
-            foreach (var t in _tracks) active.Add(t.Box);
-            return active;
+            return _tracks;
         }
 
         private static double IoU(Rect a, Rect b)

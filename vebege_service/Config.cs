@@ -53,6 +53,12 @@ namespace VeBeGe
         /// mask when segmentation briefly loses the user, so they don't flash through.
         public static double MaskHoldSeconds => GetDouble("Filter", "MaskHoldSeconds", 1.0);
 
+        /// Quiet-shield expiry: seconds a tracked face may shield the background
+        /// with zero motion anywhere in its body region before it's treated as
+        /// static scenery (a detector false positive on wall art) and released,
+        /// letting the area learn into the plate. 0 = shield forever.
+        public static double QuietShieldSeconds => GetDouble("Filter", "QuietShieldSeconds", 10.0);
+
         /// How often the service re-checks the physical camera list (seconds).
         public static int PollSeconds => Math.Max(2, GetInt("Service", "PollSeconds", 5));
 
@@ -92,6 +98,7 @@ namespace VeBeGe
             EnsureKey("Filter", "HeatSpread", HeatSpread.ToString(inv));
             EnsureKey("Filter", "HeatCooldownSeconds", HeatCooldownSeconds.ToString(inv));
             EnsureKey("Filter", "MaskHoldSeconds", MaskHoldSeconds.ToString(inv));
+            EnsureKey("Filter", "QuietShieldSeconds", QuietShieldSeconds.ToString(inv));
             EnsureKey("Service", "PollSeconds", PollSeconds.ToString(inv));
             EnsureKey("Service", "ExcludeNames", ExcludeNamesRaw);
         }

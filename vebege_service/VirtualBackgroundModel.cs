@@ -35,6 +35,7 @@ namespace VeBeGe
         private Mat _gridX;      // cached pixel-coordinate ramps (small scale), for
         private Mat _gridY;      //   evaluating the rigid camera motion per pixel.
         private Mat _heat;       // motion heatmap: cooldown frames remaining per pixel (0 = cold, learnable).
+        private Mat _lastMotion; // last frame's true-motion mask (full res, subject excluded).
         private int _frameNo;
         private int _sceneRun;   // consecutive frames the scene-change test has fired.
         private int _hotRun;     // consecutive frames the heatmap has been nearly all-hot.
@@ -133,6 +134,34 @@ namespace VeBeGe
                 }
                 Cv2.Compare(labels, best, mask, CmpType.EQ);   // 255 where label == largest
             }
+        }
+
+        /// Did any true (camera-compensated, non-subject) motion land inside r on
+        /// the most recent heat update? Corroboration for tracked people: a real
+        /// person produces flow motion; static scenery a detector false-fires on
+        /// does not. No flow data yet (startup) counts as motion, shielding wins.
+        public bool HasRecentMotion(Rect r)
+        {
+            if (_lastMotion == null) return true;
+            r &= new Rect(0, 0, _lastMotion.Width, _lastMotion.Height);
+            if (r.Width <= 0 || r.Height <= 0) return false;
+            using (var roi = new Mat(_lastMotion, r))
+                return Cv2.CountNonZero(roi) > 32;   // a couple of small-scale flow pixels = noise floor
+        }
+
+        /// Does r (inflated by half its size) touch a meaningful chunk of the
+        /// subject's mask? Used to drop face detections that are really the
+        /// webcam user leaking through a lagging segmentation, not a background
+        /// person; the inflation catches the mask sitting one frame behind.
+        public bool NearSubject(Rect r)
+        {
+            if (_fgMask == null) return false;
+            double area = Math.Max(1, (double)r.Width * r.Height);
+            r = Rect.Inflate(r, r.Width / 2, r.Height / 2)
+                & new Rect(0, 0, _fgMask.Width, _fgMask.Height);
+            if (r.Width <= 0 || r.Height <= 0) return false;
+            using (var roi = new Mat(_fgMask, r))
+                return Cv2.CountNonZero(roi) > area * 0.25;
         }
 
         /// A copy of the frame with the foreground subject blacked out, so face
@@ -457,6 +486,9 @@ namespace VeBeGe
                                         DilateFast(fgHalo, fgHalo, SubjectPad(motion.Width));
                                         motion.SetTo(Scalar.All(0), fgHalo);
                                     }
+                                // Kept for track corroboration (HasRecentMotion).
+                                _lastMotion?.Dispose();
+                                _lastMotion = motion.Clone();
                                 cameraEvent = Cv2.CountNonZero(motion) > gray.Total() * GlobalMotionFraction;
                                 HeatMark("h_post");
                                 if (!cameraEvent)
@@ -712,6 +744,7 @@ namespace VeBeGe
             _gridX?.Dispose();
             _gridY?.Dispose();
             _heat?.Dispose();
+            _lastMotion?.Dispose();
         }
     }
 }
