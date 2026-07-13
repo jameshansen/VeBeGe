@@ -36,13 +36,18 @@ background, so your room stays visible and everyone else is gone.
 VeBeGe builds a few layers out of your live camera feed, many times per second:
 
 1. **What your camera sees**, the real feed, you plus whoever wanders in.
-2. **Motion, spotted**, it flags whatever is moving that isn't you.
-3. **Your room, learned**, it quietly rebuilds the empty background behind
+2. **Motion, spotted**, it flags whatever is moving that isn't you, frame by
+   frame.
+3. **Faces, detected**, face detection combines with the motion to pick out the
+   people behind you, so they can be removed from the background.
+4. **You, isolated**, it cuts your outline out of the scene so you can be placed
+   back on top.
+5. **Your room, learned**, it quietly rebuilds the empty background behind
    people as parts of it become visible.
-4. **What the call gets**, you, composited back onto your real, people-free
+6. **What the call gets**, you, composited back onto your real, people-free
    room. Everyone else is gone before your video app ever sees them.
 
-You can see all four layers side by side on the [website](https://vebege.io/#how).
+You can see all six layers side by side on the [website](https://vebege.io/#how).
 
 ## Good to know
 
