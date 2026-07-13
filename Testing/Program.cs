@@ -7,12 +7,13 @@ using VeBeGe;
 namespace VeBeGe.Testing
 {
     /// Runs an MP4 through the real VeBeGe virtual-background filter (the same
-    /// VbgFilter the service uses) and writes five MP4s: the processed video,
+    /// VbgFilter the service uses) and writes six MP4s: the processed video,
     /// the per-frame foreground mask (white subject on black), the virtual
     /// background plate as it fills in (black where still unknown), the motion
-    /// heatmap (Jet colormap: red = hot/shielded, blue = cold/learnable), and the
+    /// heatmap (Jet colormap: red = hot/shielded, blue = cold/learnable), the
     /// tier-two background (plate + delogo inpaint fallback) the subject is
-    /// composited onto.
+    /// composited onto, and the face-detection view (detected faces as green
+    /// boxes, their inferred body regions as white boxes, on the original scene).
     ///
     /// The input is looped N times back-to-back (default 2) so the background
     /// model has time to converge and you can watch it settle over the passes.
@@ -71,6 +72,7 @@ namespace VeBeGe.Testing
             string pBg        = Path.Combine(outDir, stem + "_background.mp4");
             string pHeat      = Path.Combine(outDir, stem + "_heat.mp4");
             string pTier2     = Path.Combine(outDir, stem + "_tier2_background.mp4");
+            string pFaces     = Path.Combine(outDir, stem + "_faces.mp4");
             string pPerf      = Path.Combine(outDir, stem + "_perf.log");
 
             // Reuse the service's real filter tuning (ini defaults if unset).
@@ -101,8 +103,9 @@ namespace VeBeGe.Testing
             using (var wBg   = new VideoWriter(pBg, fourcc, fps, size))
             using (var wHeat = new VideoWriter(pHeat, fourcc, fps, size))
             using (var wTier2 = new VideoWriter(pTier2, fourcc, fps, size))
+            using (var wFaces = new VideoWriter(pFaces, fourcc, fps, size))
             {
-                if (!wProc.IsOpened() || !wMask.IsOpened() || !wBg.IsOpened() || !wHeat.IsOpened() || !wTier2.IsOpened())
+                if (!wProc.IsOpened() || !wMask.IsOpened() || !wBg.IsOpened() || !wHeat.IsOpened() || !wTier2.IsOpened() || !wFaces.IsOpened())
                 {
                     Console.Error.WriteLine("Could not open an MP4 writer (mp4v/ffmpeg backend missing?).");
                     return 1;
@@ -114,6 +117,7 @@ namespace VeBeGe.Testing
                 using (var maskBgr = new Mat())
                 using (var heatVis = new Mat())
                 using (var heatBgr = new Mat())
+                using (var faceView = new Mat())
                 using (var blackMask = new Mat(size, MatType.CV_8UC3, Scalar.All(0)))
                 using (var blackBg   = new Mat(size, MatType.CV_8UC3, Scalar.All(0)))
                 {
@@ -130,6 +134,7 @@ namespace VeBeGe.Testing
                             while (read < maxFrames && cap.Read(frame) && !frame.Empty())
                             {
                                 read++;
+                                frame.CopyTo(faceView);   // original scene, before the filter erases it
                                 sw.Restart();
                                 filter.Process(frame, pad, stayFrames, bodyScale);
                                 double ms = sw.Elapsed.TotalMilliseconds;
@@ -178,6 +183,15 @@ namespace VeBeGe.Testing
                                 }
                                 else wHeat.Write(blackBg);
 
+                                // Face-detection view: detected/tracked faces (green)
+                                // and the body region each one shields (white), on the
+                                // original scene so the actual people are visible.
+                                foreach (var b in filter.LastPeople)
+                                    Cv2.Rectangle(faceView, b, new Scalar(255, 255, 255), 2);
+                                foreach (var f in filter.LastFaces)
+                                    Cv2.Rectangle(faceView, f, new Scalar(0, 255, 0), 2);
+                                wFaces.Write(faceView);
+
                                 total++;
                             }
                         }
@@ -201,6 +215,7 @@ namespace VeBeGe.Testing
             Console.WriteLine("  " + pBg);
             Console.WriteLine("  " + pHeat);
             Console.WriteLine("  " + pTier2);
+            Console.WriteLine("  " + pFaces);
             Console.WriteLine("  " + pPerf);
             return 0;
         }

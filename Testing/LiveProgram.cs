@@ -9,9 +9,11 @@ namespace VeBeGe.Testing
 {
     /// Real-time version of the testing tool: pick a webcam, and watch the REAL
     /// VeBeGe filter (the same VbgFilter the service uses) run on the live feed.
-    /// Five OpenCV windows update per frame: the processed video, the foreground
+    /// Six OpenCV windows update per frame: the processed video, the foreground
     /// mask, the learned virtual background, the motion heatmap (Jet: red = hot/
-    /// shielded, blue = cold/learnable), and the tier-two background composite.
+    /// shielded, blue = cold/learnable), the tier-two background composite, and
+    /// the face-detection view (detected faces as green boxes, their inferred
+    /// body regions as white boxes, on the original scene).
     /// Press ESC (or Q) in any window to quit.
     internal static class LiveProgram
     {
@@ -58,10 +60,12 @@ namespace VeBeGe.Testing
                 using (var maskBgr = new Mat())
                 using (var heatVis = new Mat())
                 using (var heatBgr = new Mat())
+                using (var faceView = new Mat())
                 {
                     var sw = new Stopwatch();
                     while (cap.Read(frame) && !frame.Empty())
                     {
+                        frame.CopyTo(faceView);   // original scene, before the filter erases it
                         sw.Restart();
                         filter.Process(frame, pad, stayFrames, bodyScale);
                         perf.Record(sw.Elapsed.TotalMilliseconds, filter.LastStageMs);
@@ -90,6 +94,14 @@ namespace VeBeGe.Testing
                                 Cv2.Rectangle(heatBgr, r, new Scalar(0, 255, 0), 2);
                             Cv2.ImShow("heat", heatBgr);
                         }
+
+                        // Face-detection view: detected/tracked faces (green) and the
+                        // body region each one shields (white), on the original scene.
+                        foreach (var b in filter.LastPeople)
+                            Cv2.Rectangle(faceView, b, new Scalar(255, 255, 255), 2);
+                        foreach (var f in filter.LastFaces)
+                            Cv2.Rectangle(faceView, f, new Scalar(0, 255, 0), 2);
+                        Cv2.ImShow("faces", faceView);
 
                         int key = Cv2.WaitKey(1);
                         if (key == 27 || key == 'q' || key == 'Q') break;

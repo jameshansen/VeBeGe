@@ -78,6 +78,12 @@ namespace VeBeGe
         /// the Testing tools draw them onto the heat view).
         public IReadOnlyList<Rect> LastPeople { get; private set; } = new Rect[0];
 
+        /// The tracked face boxes that shielded the background this frame, index-
+        /// aligned with LastPeople (LastFaces[i] is the face BodyRegion produced
+        /// LastPeople[i] from). Diagnostic: the Testing tools draw the detected
+        /// face and its inferred body on the face-detection view.
+        public IReadOnlyList<Rect> LastFaces { get; private set; } = new Rect[0];
+
         /// Both models must be present (the service stages them into
         /// %ProgramData%\VeBeGe); throws with a clear message if not.
         public VbgFilter(string modelDir)
@@ -135,6 +141,7 @@ namespace VeBeGe
 
                 _tracker.MaxAge = Math.Max(0, stayFrames);
                 var people = new List<Rect>();
+                var faces = new List<Rect>();
                 foreach (var t in _tracker.Update(kept))
                 {
                     Rect body = BodyRegion(t.Box, frame.Size(), bodyScale);
@@ -145,9 +152,13 @@ namespace VeBeGe
                     // so the area can never learn and stays tier-two blurred.
                     t.Quiet = _vbm.HasRecentMotion(body) ? 0 : t.Quiet + 1;
                     if (QuietShieldFrames <= 0 || t.Quiet < QuietShieldFrames)
+                    {
                         people.Add(body);
+                        faces.Add(t.Box);
+                    }
                 }
                 LastPeople = people;
+                LastFaces = faces;
 
                 // Learn the scene where nobody is, replace the whole background
                 // with the learned plate (unlearned areas keep the live frame),
