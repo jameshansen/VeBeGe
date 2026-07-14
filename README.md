@@ -25,11 +25,14 @@ background, so your room stays visible and everyone else is gone.
 
 1. **Install VeBeGe.** No admin prompt, no reboot, it sets itself up on first
    run.
-2. **Open your video app** (Zoom, Google Meet, Microsoft Teams in a browser,
-   OBS, Discord…) and in the camera menu pick the entry ending in **(VeBeGe)**,
-   e.g. *Logitech StreamCam (VeBeGe)*.
-3. **That's it.** Join your calls as normal. Anyone who isn't you is removed
-   automatically, every time.
+2. **Restart your meeting software.** If Zoom, Google Meet, Microsoft Teams,
+   OBS or Discord was already open, quit it completely and open it again. Most
+   apps only read the camera list when they start, so this is what makes the
+   **(VeBeGe)** entries show up.
+3. **Pick the (VeBeGe) camera.** In the app's camera menu, choose the entry
+   ending in **(VeBeGe)**, e.g. *Logitech StreamCam (VeBeGe)*.
+4. **That's it.** Join your calls as normal. Anyone who isn't you is removed
+   automatically, every time, and your choice is remembered.
 
 ## How it works (the short version)
 
@@ -69,9 +72,12 @@ You can see all six layers side by side on the [website](https://vebege.io/#how)
 
 ## Download & setup
 
-Download the unsigned MSI from the
+Get the signed build from the
+**[Microsoft Store](https://apps.microsoft.com/detail/9PBSNVW5R7T3)**, that's the
+easiest way to install and it keeps itself up to date.
+
+Prefer to install it yourself? The unsigned MSI is on the
 **[latest GitHub release](https://github.com/jameshansen/VeBeGe/releases/latest)**.
-A signed version is coming soon on the **Microsoft Store**, pending approval.
 
 **[vebege.io](https://vebege.io/)** also has a full setup guide and a live demo.
 
@@ -82,7 +88,7 @@ VeBeGe is made by **James Hansen**, [jameshansen.ai](https://jameshansen.ai) ·
 **[JustShowMe](https://github.com/jameshansen/JustShowMe)**, where this
 background-removal idea was first built, see that repo for more of the
 development history. It's free; feedback and ideas are genuinely welcome through
-the contact form on the site.
+the **[contact form](https://vebege.io/contact)** on the site.
 
 ## Special Thanks
 
