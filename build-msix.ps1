@@ -150,7 +150,7 @@ $upgradeCode = $id.MsiUpgradeCode
 if ([string]::IsNullOrWhiteSpace($upgradeCode)) { throw "identity.local.ps1 is missing 'MsiUpgradeCode'." }
 $wxs = @"
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-  <Package Name="VeBeGe" Manufacturer="VeBeGe" Version="$version" UpgradeCode="$upgradeCode" Scope="perUser" Compressed="yes">
+  <Package Name="VeBeGe" Manufacturer="$($id.PublisherDisplayName)" Version="$version" UpgradeCode="$upgradeCode" Scope="perUser" Compressed="yes">
     <MediaTemplate EmbedCab="yes" />
     <MajorUpgrade DowngradeErrorMessage="A newer version of VeBeGe is already installed." />
     <Icon Id="AppIcon" SourceFile="$root\icon.ico" />
