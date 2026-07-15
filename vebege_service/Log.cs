@@ -17,7 +17,7 @@ namespace VeBeGe
                 Directory.CreateDirectory(Config.Dir);
                 lock (_lock)
                 {
-                    // ponytail: 5MB cap, one rotation. Enough history, never fills a disk.
+                    // 5MB cap, one rotation. Enough history, never fills a disk.
                     var fi = new FileInfo(Path_);
                     if (fi.Exists && fi.Length > 5 * 1024 * 1024)
                         File.Copy(Path_, Path_ + ".old", true);

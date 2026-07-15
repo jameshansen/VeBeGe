@@ -17,7 +17,7 @@ namespace VeBeGe
     /// list in sync as devices come and go, and only holds a physical camera
     /// open while some app is actually streaming from its virtual twin.
     ///
-    /// ponytail: this is a login-session background process, not a Windows
+    /// This is a login-session background process, not a Windows
     /// service, session 0 can't access cameras (privacy + session isolation),
     /// so a "camera service" HAS to live in the user session.
     internal static class Program
@@ -98,7 +98,7 @@ namespace VeBeGe
         /// this removes duplicates and stale entries left by earlier installs
         /// (different name or path) so the app never gets a pile of Run keys.
         /// It only ever deletes, installers own adding the key.
-        /// ponytail: substring match on the value, no path parsing/quoting.
+        /// Substring match on the value, no path parsing/quoting.
         private static void CleanupRunKeys()
         {
             try
@@ -127,7 +127,7 @@ namespace VeBeGe
         /// marker in the data folder. This is how the URL gets opened "after
         /// install" for both the MSI and the MSIX, a per-user MSIX can't launch
         /// a browser itself, so the app does it on its own first run.
-        /// ponytail: marker file, not a registry flag, one line to check.
+        /// Marker file, not a registry flag, one line to check.
         private static void OpenSetupOnFirstRun()
         {
             try
@@ -169,7 +169,9 @@ namespace VeBeGe
         private static void Reconcile()
         {
             var devices = CameraEnumerator.GetDevices();
-            CamerasFound = devices.Count;   // every video device the system sees (incl. our own twins)
+            var mandatory = Config.MandatoryExcludes;
+            CamerasFound = devices.Count(d =>   // real video devices, minus our own VeBeGe twins
+                !mandatory.Any(x => d.Name.IndexOf(x.Trim(), StringComparison.OrdinalIgnoreCase) >= 0));
             var exclude = Config.ExcludeNames;
             var physical = devices.Where(d =>
                     !string.IsNullOrEmpty(d.DevicePath) &&
@@ -242,7 +244,7 @@ namespace VeBeGe
 
         /// Full teardown on exit: stop the pumps and drop all virtual cameras.
         /// Idempotent, so it's safe from both ProcessExit and the normal return.
-        /// ponytail: best-effort on graceful exit/logoff/shutdown; a hard kill
+        /// Best-effort on graceful exit/logoff/shutdown; a hard kill
         /// (TerminateProcess) skips this, but the next launch's Reconcile drops
         /// any orphaned slots, so nothing accumulates.
         private static void Cleanup()

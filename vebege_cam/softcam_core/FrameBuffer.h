@@ -16,7 +16,7 @@ using std::uint16_t;
 
 /// How many virtual cameras this driver can serve at once. Each slot is an
 /// independently registered DirectShow filter with its own shared memory
-/// channel. ponytail: 8 webcams on one PC is plenty; bump both here and the
+/// channel. 8 webcams on one PC is plenty; bump both here and the
 /// CLSID table in vebege_cam.cpp if ever not.
 constexpr int MAX_SLOTS = 8;
 

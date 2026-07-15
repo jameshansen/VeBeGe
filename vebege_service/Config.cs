@@ -80,6 +80,11 @@ namespace VeBeGe
             (ExcludeNamesRaw + "," + MandatoryExcludeNames)
                 .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
 
+        /// Just the hardcoded VeBeGe self-exclusions, for counting "cameras found"
+        /// without our own virtual twins (independent of the user's exclude list).
+        public static string[] MandatoryExcludes =>
+            MandatoryExcludeNames.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+
         /// Write every user option to the ini with its default value, but only
         /// for keys that aren't already there, so the file becomes a full,
         /// editable list of options without ever clobbering a user's choices.

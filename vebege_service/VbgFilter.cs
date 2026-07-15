@@ -186,7 +186,7 @@ namespace VeBeGe
 
         // A whole-person region anchored on the face: bodyScale face-widths
         // wide, from a face-height above the head down to the frame bottom.
-        // ponytail: a rectangle, not a body model, over-shielding is the safe
+        // A rectangle, not a body model, over-shielding is the safe
         // error (it only delays background learning in that area).
         private static Rect BodyRegion(Rect face, Size bounds, double widthFactor)
         {

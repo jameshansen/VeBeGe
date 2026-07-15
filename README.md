@@ -103,3 +103,6 @@ spot people in the frame.
 The [PP-HumanSeg](https://github.com/opencv/opencv_zoo/tree/main/models/human_segmentation_pphumanseg)
 human-segmentation model (PaddlePaddle / Baidu), distributed via the OpenCV Zoo,
 used for the foreground/background mask.
+
+[ponytail](https://github.com/DietrichGebert/ponytail/), used with Claude Code
+during development to keep the implementation lean.

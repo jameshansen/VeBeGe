@@ -46,7 +46,7 @@ namespace VeBeGe
         // Argmax over the 2 channels of the output → person mask. The output is a
         // contiguous 4-D [1,2,192,192] tensor of softmax scores in PLANAR NCHW order:
         // the whole bg plane (192*192 floats) followed by the whole person plane.
-        // ponytail: plain loop over 192*192 px is trivially cheap and obviously correct.
+        // Plain loop over 192*192 px is trivially cheap and obviously correct.
         private static Mat MaskFromOutput(Mat outp)
         {
             int plane = InW * InH;                      // 192*192 per class

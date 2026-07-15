@@ -8,7 +8,7 @@ namespace VeBeGe
     /// the detector stops seeing it, the "staytime", so a head turning
     /// through an angle the detector momentarily misses keeps being excluded
     /// from the learned background instead of baking in.
-    /// ponytail: greedy IoU match, no Kalman/Hungarian, fine at these counts.
+    /// Greedy IoU match, no Kalman/Hungarian, fine at these counts.
     /// (JustShowMe's appearance-embedding fallback is gone with recognition.)
     internal sealed class FaceTracker
     {

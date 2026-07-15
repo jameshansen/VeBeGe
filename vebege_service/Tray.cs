@@ -47,7 +47,7 @@ namespace VeBeGe
         {
             int found = Program.CamerasFound, active = Program.MirrorsActive;
             _found.Text  = $"{found} Camera{(found == 1 ? "" : "s")} Found";
-            _active.Text = $"{active} Compatible Camera{(active == 1 ? "" : "s")}, VeBeGe Enabled";
+            _active.Text = $"{active} Compatible Camera{(active == 1 ? "" : "s")} — VeBeGe Enabled";
         }
 
         private static Icon LoadTrayIcon()

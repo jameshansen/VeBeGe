@@ -28,6 +28,7 @@ namespace VeBeGe
         private Mat _prevFgMask; // 255 = person, last frame (to immunise the subject's own swept path).
         private Mat _lastGoodMask; // last mask with a real subject blob, reused during dropouts.
         private int _maskHeld;   // consecutive frames the mask has been held through a dropout.
+        private Point2d? _blobCentre; // tracked subject centroid; null = not locked onto anyone yet.
         private Mat _bg;         // BGR accumulated background (unknown areas are black placeholder).
         private Mat _known;      // 255 where _bg holds real, revealed background.
         private Mat _prevSmall;  // downscaled previous frame (fast-motion flow baseline).
@@ -117,23 +118,67 @@ namespace VeBeGe
                     Cv2.Dilate(_fgMask, _fgMask, k);
         }
 
-        // Reduce a binary mask to its single largest connected component.
-        private static void KeepLargestBlob(Mat mask)
+        // How far (fraction of frame width) the subject centre may travel between
+        // frames before a candidate blob is treated as a different person rather
+        // than the subject moving. ~0.20 of 1280px = 256px/frame, generous for real
+        // movement at 30fps but far short of snapping to someone standing beside you.
+        // Single per-frame gate; add velocity prediction only if fast pans slip.
+        private const double MaxBlobJumpFrac = 0.20;
+
+        // Reduce a binary mask to the subject's connected component. We track the
+        // subject's centroid across frames and stay locked onto the blob nearest it,
+        // so a larger person stepping in beside you doesn't suddenly steal the
+        // foreground. We only re-lock onto the largest blob when the lock is lost
+        // (subject left frame / their blob shrank away) or on the first frame.
+        private void KeepLargestBlob(Mat mask)
         {
             using (var labels = new Mat())
             using (var stats = new Mat())
             using (var centroids = new Mat())
             {
                 int n = Cv2.ConnectedComponentsWithStats(mask, labels, stats, centroids);
-                if (n <= 2) return;   // background + at most one blob: nothing to prune
+                if (n <= 1) { _blobCentre = null; return; }          // all background: lock lost
+                if (n == 2)                                          // one blob: that's the subject
+                {
+                    _blobCentre = new Point2d(centroids.Get<double>(1, 0), centroids.Get<double>(1, 1));
+                    return;
+                }
+
+                double minKeep = mask.Total() * 0.01;   // < ~1% of frame = too small to hold the lock
+
+                // Prefer staying locked: nearest blob to our tracked centre, if it's
+                // close enough and still a real subject (not a shrinking dropout).
+                if (_blobCentre is Point2d prev)
+                {
+                    int near = -1; double nearDist = double.MaxValue;
+                    for (int i = 1; i < n; i++)   // skip label 0 = background
+                    {
+                        if (stats.Get<int>(i, (int)ConnectedComponentsTypes.Area) < minKeep) continue;
+                        double dx = centroids.Get<double>(i, 0) - prev.X;
+                        double dy = centroids.Get<double>(i, 1) - prev.Y;
+                        double d2 = dx * dx + dy * dy;
+                        if (d2 < nearDist) { nearDist = d2; near = i; }
+                    }
+                    double maxJump = mask.Width * MaxBlobJumpFrac;
+                    if (near > 0 && nearDist <= maxJump * maxJump) { SelectBlob(near, mask, labels, centroids); return; }
+                }
+
+                // No lock, or the tracked subject is gone: (re)lock onto the largest blob.
                 int best = 1, bestArea = -1;
-                for (int i = 1; i < n; i++)   // skip label 0 = background
+                for (int i = 1; i < n; i++)
                 {
                     int area = stats.Get<int>(i, (int)ConnectedComponentsTypes.Area);   // At<T> needs an unshipped assembly
                     if (area > bestArea) { bestArea = area; best = i; }
                 }
-                Cv2.Compare(labels, best, mask, CmpType.EQ);   // 255 where label == largest
+                SelectBlob(best, mask, labels, centroids);
             }
+        }
+
+        // Keep only the given label in the mask and record its centroid as the lock.
+        private void SelectBlob(int label, Mat mask, Mat labels, Mat centroids)
+        {
+            _blobCentre = new Point2d(centroids.Get<double>(label, 0), centroids.Get<double>(label, 1));
+            Cv2.Compare(labels, label, mask, CmpType.EQ);   // 255 where label == subject
         }
 
         /// Did any true (camera-compensated, non-subject) motion land inside r on
@@ -381,7 +426,7 @@ namespace VeBeGe
                 // Guard: when the holes swamp the frame (startup, camera event) there's
                 // no clean border to interpolate from and inpaint smears garbage, keep
                 // the live frame instead.
-                // ponytail: fraction guard as a cheap proxy for "enough known border".
+                // Fraction guard as a cheap proxy for "enough known border".
                 if (n > frame.Total() * 0.5) return;
                 // Cv2.Inpaint is exactly "interpolate the masked region from its
                 // borders inward", but full-res Telea cost scales with hole area
