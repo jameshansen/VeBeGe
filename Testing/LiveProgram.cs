@@ -47,61 +47,73 @@ namespace VeBeGe.Testing
                 Console.WriteLine($"Perf  : {perfPath}");
                 Console.WriteLine("Press ESC or Q in any window to quit.");
 
-                using (var filter = new VbgFilter(baseDir)
-                       {
-                           HeatMinFlow = Config.HeatMinFlow,
-                           HeatSpread = Config.HeatSpread,
-                           HeatCooldownFrames = heatCooldownFrames,
-                           MaskHoldFrames = (int)Math.Round(Config.MaskHoldSeconds * fps),
-                           QuietShieldFrames = (int)Math.Round(Config.QuietShieldSeconds * fps),
-                       })
+                // The same pipeline the service pumps: the filter on a worker,
+                // the "processed" window fed by the output stage at camera rate
+                // (so the startup loading screen animates exactly as it does on
+                // the virtual camera). The diagnostic views update at the
+                // filter's own rate, when a new result lands.
+                using (var pipe = new VbgPipeline(baseDir, fps))
                 using (var perf = new PerfLog(perfPath, $"live: [{index}] {cams.Find(c => c.Index == index)?.Name} @ {Config.Width}x{Config.Height}", echoToConsole: true))
                 using (var frame = new Mat())
+                using (var submitted = new Mat())
                 using (var maskBgr = new Mat())
                 using (var heatVis = new Mat())
                 using (var heatBgr = new Mat())
                 using (var faceView = new Mat())
                 {
-                    var sw = new Stopwatch();
+                    long seen = 0;
                     while (cap.Read(frame) && !frame.Empty())
                     {
-                        frame.CopyTo(faceView);   // original scene, before the filter erases it
-                        sw.Restart();
-                        filter.Process(frame, pad, stayFrames, bodyScale);
-                        perf.Record(sw.Elapsed.TotalMilliseconds, filter.LastStageMs);
+                        // A new result has landed: the worker is idle exactly
+                        // here (only this thread starts it), so the filter's
+                        // diagnostic views are safe to read. `submitted` is the
+                        // raw frame that produced them.
+                        VbgFilter filter = pipe.Filter;
+                        if (filter != null && pipe.ProcessedFrames != seen)
+                        {
+                            seen = pipe.ProcessedFrames;
+                            perf.Record(pipe.LastProcessMs, filter.LastStageMs);
+
+                            Mat mask = filter.ForegroundMask;
+                            if (mask != null && !mask.Empty())
+                            {
+                                Cv2.CvtColor(mask, maskBgr, ColorConversionCodes.GRAY2BGR);
+                                Cv2.ImShow("mask", maskBgr);
+                            }
+
+                            Mat bg = filter.VirtualBackground;
+                            if (bg != null && !bg.Empty()) Cv2.ImShow("background", bg);
+
+                            Mat tier2 = filter.TierTwoBackground;
+                            if (tier2 != null && !tier2.Empty()) Cv2.ImShow("tier2_background", tier2);
+
+                            Mat heat = filter.MotionHeat;
+                            if (heat != null && !heat.Empty())
+                            {
+                                heat.ConvertTo(heatVis, MatType.CV_8UC1, 255.0 / Math.Max(1, Math.Min(255, heatCooldownFrames)));
+                                Cv2.ApplyColorMap(heatVis, heatBgr, ColormapTypes.Jet);
+                                // Green = body regions actively shielding this frame.
+                                foreach (var r in filter.LastPeople)
+                                    Cv2.Rectangle(heatBgr, r, new Scalar(0, 255, 0), 2);
+                                Cv2.ImShow("heat", heatBgr);
+                            }
+
+                            // Face-detection view: detected/tracked faces (green) and the
+                            // body region each one shields (white), on the original scene.
+                            if (!submitted.Empty())
+                            {
+                                submitted.CopyTo(faceView);
+                                foreach (var b in filter.LastPeople)
+                                    Cv2.Rectangle(faceView, b, new Scalar(255, 255, 255), 2);
+                                foreach (var f in filter.LastFaces)
+                                    Cv2.Rectangle(faceView, f, new Scalar(0, 255, 0), 2);
+                                Cv2.ImShow("faces", faceView);
+                            }
+                        }
+
+                        if (pipe.Submit(frame)) frame.CopyTo(submitted);
+                        pipe.Present(frame);
                         Cv2.ImShow("processed", frame);
-
-                        Mat mask = filter.ForegroundMask;
-                        if (mask != null && !mask.Empty())
-                        {
-                            Cv2.CvtColor(mask, maskBgr, ColorConversionCodes.GRAY2BGR);
-                            Cv2.ImShow("mask", maskBgr);
-                        }
-
-                        Mat bg = filter.VirtualBackground;
-                        if (bg != null && !bg.Empty()) Cv2.ImShow("background", bg);
-
-                        Mat tier2 = filter.TierTwoBackground;
-                        if (tier2 != null && !tier2.Empty()) Cv2.ImShow("tier2_background", tier2);
-
-                        Mat heat = filter.MotionHeat;
-                        if (heat != null && !heat.Empty())
-                        {
-                            heat.ConvertTo(heatVis, MatType.CV_8UC1, 255.0 / Math.Max(1, Math.Min(255, heatCooldownFrames)));
-                            Cv2.ApplyColorMap(heatVis, heatBgr, ColormapTypes.Jet);
-                            // Green = body regions actively shielding this frame.
-                            foreach (var r in filter.LastPeople)
-                                Cv2.Rectangle(heatBgr, r, new Scalar(0, 255, 0), 2);
-                            Cv2.ImShow("heat", heatBgr);
-                        }
-
-                        // Face-detection view: detected/tracked faces (green) and the
-                        // body region each one shields (white), on the original scene.
-                        foreach (var b in filter.LastPeople)
-                            Cv2.Rectangle(faceView, b, new Scalar(255, 255, 255), 2);
-                        foreach (var f in filter.LastFaces)
-                            Cv2.Rectangle(faceView, f, new Scalar(0, 255, 0), 2);
-                        Cv2.ImShow("faces", faceView);
 
                         int key = Cv2.WaitKey(1);
                         if (key == 27 || key == 'q' || key == 'Q') break;

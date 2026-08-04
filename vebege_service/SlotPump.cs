@@ -38,12 +38,11 @@ namespace VeBeGe
         private void Loop()
         {
             int w = Config.Width, h = Config.Height, fps = Config.Fps;
-            int stayFrames = (int)Math.Round(Config.StaySeconds * fps);
 
             VirtualCamera vcam = null;
             VideoCapture cap = null;
-            VbgFilter filter = null;
-            bool filterBroken = false;      // models missing/corrupt → passthrough, log once
+            VbgPipeline pipe = null;
+            bool loggedBroken = false;      // models missing/corrupt → passthrough, log once
             uint lastHb = 0;
             DateTime lastHbChange = DateTime.MinValue;
 
@@ -70,7 +69,7 @@ namespace VeBeGe
                         if (cap != null && now - lastHbChange > IdleLinger)
                         {
                             cap.Release(); cap.Dispose(); cap = null;
-                            filter?.Dispose(); filter = null;
+                            pipe?.Dispose(); pipe = null;
                             Log.Write($"slot {_slot}: idle, released \"{DeviceName}\"");
                         }
                         Thread.Sleep(300);
@@ -89,25 +88,11 @@ namespace VeBeGe
                         cap.Set(VideoCaptureProperties.FrameWidth, w);
                         cap.Set(VideoCaptureProperties.FrameHeight, h);
                         Log.Write($"slot {_slot}: streaming, opened \"{DeviceName}\" as index {_deviceIndex}");
-                        if (filter == null && !filterBroken)
-                        {
-                            try
-                            {
-                                filter = new VbgFilter(Config.Dir)
-                                {
-                                    HeatMinFlow = Config.HeatMinFlow,
-                                    HeatSpread = Config.HeatSpread,
-                                    HeatCooldownFrames = (int)Math.Round(Config.HeatCooldownSeconds * fps),
-                                    MaskHoldFrames = (int)Math.Round(Config.MaskHoldSeconds * fps),
-                                    QuietShieldFrames = (int)Math.Round(Config.QuietShieldSeconds * fps),
-                                };
-                            }
-                            catch (Exception ex)
-                            {
-                                filterBroken = true;   // still serve raw frames, camera "just works"
-                                Log.Write($"slot {_slot}: filter unavailable, passing frames through", ex);
-                            }
-                        }
+                        // New session, new pipeline: models load in the
+                        // background and the loading screen starts now. Kept
+                        // across a capture glitch below, that must not wipe the
+                        // learned plate or replay the loading screen.
+                        if (pipe == null) pipe = new VbgPipeline(Config.Dir, fps);
                     }
 
                     if (!cap.Read(frame) || frame.Empty())
@@ -119,8 +104,19 @@ namespace VeBeGe
                         continue;
                     }
 
-                    try { filter?.Process(frame, Config.Padding, stayFrames, Config.BodyScale); }
-                    catch (Exception ex) { Log.Write($"slot {_slot}: filter.Process", ex); }
+                    // Hand the newest frame to the filter (dropped if it's still
+                    // busy with the last one) and emit the current output. The
+                    // pump therefore runs at CAMERA rate, not filter rate: the
+                    // output stage repeats the last processed frame, which is
+                    // what makes the loading animation smooth and what keeps a
+                    // steady stream going to the consuming app.
+                    pipe.Submit(frame);
+                    pipe.Present(frame);
+                    if (pipe.Broken && !loggedBroken)
+                    {
+                        loggedBroken = true;   // still serve raw frames, camera "just works"
+                        Log.Write($"slot {_slot}: filter unavailable, passing frames through", pipe.LoadError);
+                    }
 
                     vcam.SendFrame(frame);   // paces to fps internally
                 }
@@ -132,7 +128,7 @@ namespace VeBeGe
             finally
             {
                 cap?.Release(); cap?.Dispose();
-                filter?.Dispose();
+                pipe?.Dispose();
                 vcam?.Dispose();
                 Log.Write($"slot {_slot}: pump down");
             }

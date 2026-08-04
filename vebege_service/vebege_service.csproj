@@ -62,12 +62,14 @@
     <Compile Include="Config.cs" />
     <Compile Include="DriverRegistrar.cs" />
     <Compile Include="FaceTracker.cs" />
+    <Compile Include="LoadingOverlay.cs" />
     <Compile Include="Log.cs" />
     <Compile Include="PersonSegmenter.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="SlotPump.cs" />
     <Compile Include="Tray.cs" />
     <Compile Include="VbgFilter.cs" />
+    <Compile Include="VbgPipeline.cs" />
     <Compile Include="VirtualBackgroundModel.cs" />
     <Compile Include="VirtualCamera.cs" />
     <Compile Include="YuNetFaceDetector.cs" />

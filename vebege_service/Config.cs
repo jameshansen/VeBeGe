@@ -59,6 +59,13 @@ namespace VeBeGe
         /// letting the area learn into the plate. 0 = shield forever.
         public static double QuietShieldSeconds => GetDouble("Filter", "QuietShieldSeconds", 10.0);
 
+        /// Startup loading screen: how long (seconds) the feed stays blurred
+        /// behind the progress ring while the models load and the background
+        /// plate fills in, before giving up and revealing it anyway. The plate
+        /// often never reaches 100% (a face parked in the shot keeps its area
+        /// hot), so this is normally what ends the wait.
+        public static double StartupSeconds => GetDouble("Service", "StartupSeconds", 10.0);
+
         /// How often the service re-checks the physical camera list (seconds).
         public static int PollSeconds => Math.Max(2, GetInt("Service", "PollSeconds", 5));
 
@@ -105,6 +112,7 @@ namespace VeBeGe
             EnsureKey("Filter", "MaskHoldSeconds", MaskHoldSeconds.ToString(inv));
             EnsureKey("Filter", "QuietShieldSeconds", QuietShieldSeconds.ToString(inv));
             EnsureKey("Service", "PollSeconds", PollSeconds.ToString(inv));
+            EnsureKey("Service", "StartupSeconds", StartupSeconds.ToString(inv));
             EnsureKey("Service", "ExcludeNames", ExcludeNamesRaw);
         }
 

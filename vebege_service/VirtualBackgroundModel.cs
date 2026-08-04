@@ -59,6 +59,19 @@ namespace VeBeGe
         /// The live motion heatmap (cooldown frames remaining; 0 = cold). Diagnostic view.
         public Mat Heat => _heat;
 
+        /// How far the scene has cooled, 0..1: mean coldness over the frame,
+        /// i.e. how much of the cooldown the heatmap has worked through. The
+        /// map ignites FULLY at startup and cools one frame per frame, so this
+        /// ramps steadily from 0 to 1 as the plate becomes learnable, and it
+        /// stalls (or stops rising) wherever something keeps moving. Mean, not
+        /// "fraction fully cold": every pixel starts at the same value and so
+        /// crosses zero at the same moment, which would make that a step, not a
+        /// progress signal. Startup feedback, the O(N) scan only runs while the
+        /// caller asks for it.
+        public double Coldness =>
+            _heat == null ? 0
+                : 1 - Cv2.Mean(_heat).Val0 / Math.Max(1, Math.Min(255, HeatCooldownFrames));
+
         /// Wall time (ms) UpdateHeat took inside the last Update call, plus its
         /// internal phase breakdown. Diagnostics for the Testing harness.
         public double LastHeatMs { get; private set; }
@@ -81,6 +94,11 @@ namespace VeBeGe
         /// The accumulated background plate; unknown (not-yet-revealed) pixels
         /// are left black. Read-only view for diagnostics/testing.
         public Mat Background => _bg;
+
+        /// How many times a sustained scene change has thrown the plate away
+        /// and started it over (the camera was moved). Everything learned is
+        /// gone at that point, so the caller puts its loading screen back up.
+        public int PlateResets { get; private set; }
 
         /// Segment the frame into the foreground mask (255 = person).
         /// pad > 0 dilates the mask so the kept foreground area grows by that many pixels.
@@ -246,6 +264,11 @@ namespace VeBeGe
                 bool reset = _bg == null || _bg.Size() != frame.Size() || _sceneRun >= SceneChangePersist;
                 if (reset)
                 {
+                    // A SUSTAINED scene change, i.e. someone moved the camera:
+                    // the plate is thrown away and has to be rebuilt from
+                    // nothing, so the startup loading screen goes back up. The
+                    // first-frame build is not a reset, nobody had a plate yet.
+                    if (_bg != null && _sceneRun >= SceneChangePersist) PlateResets++;
                     // No immediate seeding: the plate refills through the motion
                     // gate below (unknown areas pass the live frame through, so
                     // there's no visual gap, just a cooldown of relearning).

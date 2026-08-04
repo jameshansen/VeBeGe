@@ -42,6 +42,16 @@ namespace VeBeGe
         /// back on. Valid after Process.
         public Mat TierTwoBackground => _tierTwoBg;
 
+        /// How far the background plate has come, 0..1: how much of the motion
+        /// cooldown the scene has worked through, and so how close it is to
+        /// being learnable. Reaches 1 on a settled scene, stalls below it while
+        /// anything keeps moving. Drives the startup loading screen.
+        public double LearnProgress => _vbm.Coldness;
+
+        /// Bumped whenever a sustained scene change (the camera moved) throws
+        /// the learned plate away: the pipeline puts its loading screen back up.
+        public int PlateResets => _vbm.PlateResets;
+
         /// Per-stage wall times (ms) of the last Process call, in pipeline order.
         /// Diagnostics for the Testing harness; costs ~nothing to maintain.
         public readonly List<KeyValuePair<string, double>> LastStageMs =

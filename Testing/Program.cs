@@ -89,14 +89,11 @@ namespace VeBeGe.Testing
             Console.WriteLine($"Filter: pad={pad}, bodyScale={bodyScale}, stayFrames={stayFrames}");
             Console.WriteLine($"Heat  : minFlow={Config.HeatMinFlow}px, spread={Config.HeatSpread}px, cooldown={heatCooldownFrames} frames");
 
-            using (var filter = new VbgFilter(baseDir)
-                   {
-                       HeatMinFlow = Config.HeatMinFlow,
-                       HeatSpread = Config.HeatSpread,
-                       HeatCooldownFrames = heatCooldownFrames,
-                       MaskHoldFrames = (int)Math.Round(Config.MaskHoldSeconds * fps),
-                       QuietShieldFrames = (int)Math.Round(Config.QuietShieldSeconds * fps),
-                   })
+            // The service's pipeline, driven synchronously: every frame goes
+            // through the filter (no realtime dropping unless -Realtime asks
+            // for it), and the processed video gets the same output stage the
+            // virtual camera does, loading screen included.
+            using (var pipe = new VbgPipeline(baseDir, fps))
             using (var perf = new PerfLog(pPerf, $"mp4: {stem} @ {width}x{height}, {loops}x loop"))
             using (var wProc = new VideoWriter(pProcessed, fourcc, fps, size))
             using (var wMask = new VideoWriter(pMask, fourcc, fps, size))
@@ -135,9 +132,9 @@ namespace VeBeGe.Testing
                             {
                                 read++;
                                 frame.CopyTo(faceView);   // original scene, before the filter erases it
-                                sw.Restart();
-                                filter.Process(frame, pad, stayFrames, bodyScale);
-                                double ms = sw.Elapsed.TotalMilliseconds;
+                                pipe.Process(frame);
+                                VbgFilter filter = pipe.Filter;
+                                double ms = pipe.LastProcessMs;
                                 perf.Record(ms, filter.LastStageMs);
                                 if (realtime)
                                 {
@@ -151,6 +148,11 @@ namespace VeBeGe.Testing
                                         owed -= 1; dropped++; read++;
                                     }
                                 }
+                                // Output stage, on VIDEO time: the clip is not
+                                // processed in real time, so the loading screen
+                                // has to cover the first StartupSeconds of
+                                // FOOTAGE, the same stretch a viewer sees it over.
+                                pipe.Present(frame, (total + dropped) / fps);
                                 wProc.Write(frame);
 
                                 Mat mask = filter.ForegroundMask;

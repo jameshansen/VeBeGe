@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 // The Testing harness drives the real filter classes (internal) directly.
 [assembly: InternalsVisibleTo("vebege_testing")]
 [assembly: InternalsVisibleTo("vebege_live")]
+[assembly: InternalsVisibleTo("vebege_check")]   // Testing\pipeline-check.ps1
 
 [assembly: AssemblyTitle("VeBeGe")]
 [assembly: AssemblyDescription("VeBeGe, virtual background virtual cameras that just work")]
