@@ -1,4 +1,6 @@
 using System;
+using System.Runtime.InteropServices;
+using System.Threading;
 using Microsoft.Win32;
 
 namespace VeBeGe
@@ -64,6 +66,115 @@ namespace VeBeGe
         {
             using (var k = Registry.CurrentUser.OpenSubKey(CategoryKey + @"\" + Clsid(slot)))
                 return k != null;
+        }
+
+        [DllImport("user32", SetLastError = true)]
+        private static extern int BroadcastSystemMessage(
+            uint flags, ref uint recipients, uint msg, IntPtr wParam, IntPtr lParam);
+
+        private const uint BSF_IGNORECURRENTTASK = 0x00000002, BSF_NOHANG = 0x00000008,
+                           BSF_POSTMESSAGE = 0x00000010, BSF_FORCEIFHUNG = 0x00000020;
+        private const uint BSM_APPLICATIONS = 0x00000008;
+        private const uint WM_DEVICECHANGE = 0x0219;
+        private const uint DBT_DEVNODES_CHANGED = 0x0007, DBT_DEVICEARRIVAL = 0x8000;
+        private const int DBT_DEVTYP_DEVICEINTERFACE = 5;
+
+        // The camera interface classes apps subscribe to with
+        // RegisterDeviceNotification. Both of these are in Zoom's video dll
+        // (nydus.dll); its audio dll uses the KSCATEGORY_CAPTURE/RENDER pair,
+        // which we deliberately leave alone.
+        private static readonly Guid[] CameraInterfaces =
+        {
+            new Guid("6994ad05-93ef-11d0-a3cc-00a0c9223196"),   // KSCATEGORY_VIDEO
+            new Guid("e5323777-f976-4f5b-9b55-b94699c46e44"),   // KSCATEGORY_VIDEO_CAMERA
+        };
+
+        // DEV_BROADCAST_DEVICEINTERFACE. The name buffer is not optional even
+        // though the name never arrives: user32 refuses to broadcast a payload
+        // sized as the bare 32-byte struct (returns 0), and truncates what it
+        // does send back down to 32 bytes at the receiver. So the path costs
+        // nothing to fill in and the send fails without room for it. What the
+        // receiver actually gets, and all we need, is the class GUID.
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct DevBroadcastDeviceInterface
+        {
+            public int Size, DeviceType, Reserved;
+            public Guid ClassGuid;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string Name;
+        }
+
+        /// Tell running apps the camera list changed, so Zoom/Chrome/OBS
+        /// re-enumerate and our twins appear without being restarted. Our
+        /// cameras are COM registry entries, not PnP devices, so nothing
+        /// announces them otherwise.
+        ///
+        /// Two messages, because apps listen for different things:
+        /// DBT_DEVNODES_CHANGED (the generic "something changed") and a
+        /// DBT_DEVICEARRIVAL per camera interface class, which is what
+        /// RegisterDeviceNotification subscribers actually act on.
+        ///
+        /// ponytail: broadcast only, so it reaches top-level windows and not
+        /// message-only ones. An app listening on HWND_MESSAGE still needs a
+        /// restart; faking a genuine PnP arrival needs a real device node,
+        /// i.e. MFCreateVirtualCamera on Win11.
+        ///
+        /// Runs on its own thread unless `wait`, because the arrival broadcast
+        /// is a synchronous cross-process send and a receiver that re-enumerates
+        /// its cameras sits on it (measured: 35 s for KSCATEGORY_VIDEO_CAMERA on
+        /// the reference machine). BSF_NOHANG bounds a *hung* app, not a merely
+        /// slow one, and neither the reconcile loop nor process exit may wait on
+        /// someone else's camera scan.
+        public static void NotifyDeviceChange(bool wait = false)
+        {
+            // One announcement at a time: a flapping camera must not pile up
+            // 35-second threads.
+            if (Interlocked.CompareExchange(ref _announcing, 1, 0) == 1) return;
+            if (wait) Announce();
+            else new Thread(Announce) { IsBackground = true, Name = "VeBeGe device notify" }.Start();
+        }
+
+        private static int _announcing;
+
+        private static void Announce()
+        {
+            try { AnnounceCore(); }
+            catch (Exception ex) { Log.Write("NotifyDeviceChange", ex); }
+            finally { Interlocked.Exchange(ref _announcing, 0); }
+        }
+
+        private static void AnnounceCore()
+        {
+            uint recipients = BSM_APPLICATIONS;
+            BroadcastSystemMessage(BSF_POSTMESSAGE | BSF_IGNORECURRENTTASK, ref recipients,
+                WM_DEVICECHANGE, (IntPtr)DBT_DEVNODES_CHANGED, IntPtr.Zero);
+
+            var dbi = new DevBroadcastDeviceInterface
+            {
+                Size = Marshal.SizeOf(typeof(DevBroadcastDeviceInterface)),
+                DeviceType = DBT_DEVTYP_DEVICEINTERFACE,
+            };
+            IntPtr buf = Marshal.AllocHGlobal(dbi.Size);
+            try
+            {
+                foreach (var iface in CameraInterfaces)
+                {
+                    dbi.ClassGuid = iface;
+                    dbi.Name = @"\\?\root#media#0000#{" + iface + @"}\global";
+                    Marshal.StructureToPtr(dbi, buf, false);
+                    // Sent, not posted: user32 only marshals the payload for a
+                    // sent message, a posted one hands the receiver a dangling
+                    // pointer. NOHANG|FORCEIFHUNG bounds it against a wedged app.
+                    recipients = BSM_APPLICATIONS;
+                    int rc = BroadcastSystemMessage(BSF_IGNORECURRENTTASK | BSF_NOHANG | BSF_FORCEIFHUNG,
+                        ref recipients, WM_DEVICECHANGE, (IntPtr)DBT_DEVICEARRIVAL, buf);
+                    // rc > 0 is success; anything else means nobody was told, and
+                    // silently swallowing that is what hid a malformed payload.
+                    Log.Write(rc > 0
+                        ? $"Announced camera arrival ({iface})"
+                        : $"Camera arrival broadcast FAILED ({iface}), rc={rc} err={Marshal.GetLastWin32Error()}");
+                }
+            }
+            finally { Marshal.FreeHGlobal(buf); }
         }
 
         /// Current FriendlyName of a registered slot, or null.

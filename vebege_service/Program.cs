@@ -58,6 +58,14 @@ namespace VeBeGe
                 return;
             }
 
+            // Testing aid: fire the device-change announcement and exit, so the
+            // effect on a running app can be checked without bouncing the service.
+            if (args.Any(a => a.Equals("-notify", StringComparison.OrdinalIgnoreCase)))
+            {
+                DriverRegistrar.NotifyDeviceChange(wait: true);
+                return;
+            }
+
             using (var mutex = new Mutex(true, "VeBeGe.Service.SingleInstance", out bool first))
             {
                 if (!first) return;   // already running
@@ -203,6 +211,7 @@ namespace VeBeGe
             }
 
             string dllPath = Path.Combine(Config.Dir, "vebege_cam.dll");
+            bool changed = false;
 
             for (int slot = 0; slot < MaxSlots; slot++)
             {
@@ -210,7 +219,10 @@ namespace VeBeGe
                 {
                     string name = dev.Name + " (VeBeGe)";
                     if (DriverRegistrar.RegisteredName(slot) != name)
+                    {
                         DriverRegistrar.Register(slot, name, dllPath);
+                        changed = true;
+                    }
                     if (Pumps.TryGetValue(slot, out var pump)) pump.DeviceIndex = dev.Index;
                     else Pumps[slot] = new SlotPump(slot, dev.Index, name);
                 }
@@ -222,9 +234,16 @@ namespace VeBeGe
                         Pumps.Remove(slot);
                     }
                     if (DriverRegistrar.IsRegistered(slot))
+                    {
                         DriverRegistrar.Unregister(slot);
+                        changed = true;
+                    }
                 }
             }
+
+            // One broadcast per pass, not per slot, so already-running apps
+            // re-enumerate and pick the twins up without being restarted.
+            if (changed) DriverRegistrar.NotifyDeviceChange();
 
             MirrorsActive = desired.Count;
         }
@@ -240,6 +259,7 @@ namespace VeBeGe
         private static void UnregisterAllCams()
         {
             for (int s = 0; s < MaxSlots; s++) DriverRegistrar.Unregister(s);
+            DriverRegistrar.NotifyDeviceChange();   // so open apps drop the dead entries too
         }
 
         /// Full teardown on exit: stop the pumps and drop all virtual cameras.
