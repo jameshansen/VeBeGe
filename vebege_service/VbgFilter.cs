@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Threading.Tasks;
 using OpenCvSharp;
 
 namespace VeBeGe
@@ -20,13 +21,9 @@ namespace VeBeGe
         private readonly VirtualBackgroundModel _vbm;
         private readonly FaceTracker _tracker = new FaceTracker();
         private Mat _tierTwoBg;   // background composite (tier one + tier two) before the user goes on.
-
-        // YuNet costs ~20 ms/frame, but skipping frames proved too lossy: at low
-        // effective fps a walker moves too far between samples and slips through.
-        // Keep 1 (detect every frame) unless the fps budget truly demands it.
-        private const int DetectEvery = 1;
-        private int _frameNo;
-        private IReadOnlyList<Rect> _lastDetections = new Rect[0];
+        // Detection runs on EVERY frame. Every-2nd-frame was tried and reverted:
+        // at low effective fps a walker moves too far between samples, the
+        // tracker loses them, and they walk through unblurred.
 
         /// Diagnostic hooks (used by the Testing harness): the per-frame
         /// foreground mask (255 = subject), the accumulated virtual background
@@ -43,10 +40,16 @@ namespace VeBeGe
         public Mat TierTwoBackground => _tierTwoBg;
 
         /// How far the background plate has come, 0..1: how much of the motion
-        /// cooldown the scene has worked through, and so how close it is to
-        /// being learnable. Reaches 1 on a settled scene, stalls below it while
-        /// anything keeps moving. Drives the startup loading screen.
-        public double LearnProgress => _vbm.Coldness;
+        /// cooldown the scene has worked through (mean coldness, a smooth ramp
+        /// for the dial), and exactly 1 once tier-two has nothing large left to
+        /// smear, i.e. the output is trustworthy. Coldness alone never quite
+        /// gets there on a real webcam: sensor-noise flow keeps a few percent
+        /// of the map hot for good, so a dial waiting for 1.0 only ever ended
+        /// on the deadline. Stalls below 1 while someone parked in the shot
+        /// keeps a body region unlearned. Drives the startup loading screen.
+        public double LearnProgress =>
+            _vbm.TierTwoHoles <= DoneHoles ? 1 : Math.Min(0.99, _vbm.Coldness);
+        private const double DoneHoles = 0.02;   // of the frame; below this the smear is invisible
 
         /// Bumped whenever a sustained scene change (the camera moved) throws
         /// the learned plate away: the pipeline puts its loading screen back up.
@@ -96,10 +99,28 @@ namespace VeBeGe
 
         /// Both models must be present (the service stages them into
         /// %ProgramData%\VeBeGe); throws with a clear message if not.
-        public VbgFilter(string modelDir)
+        /// frameSize: the frames that will be processed. OpenCV's DNN builds its
+        /// layer plan on the first forward for a given input shape, so that
+        /// cost is paid here (inside the pipeline's background load, off the
+        /// camera thread) rather than on the first real frame.
+        public VbgFilter(string modelDir, Size frameSize)
         {
+            // OpenCV defaults to one worker per LOGICAL core, and on an SMT
+            // machine that over-subscribes: measured 24 → 12 threads took the
+            // whole frame from 83 to 74 ms and the two nets from 25/22 to
+            // 19/14 ms (Ryzen 3900-class). Process-wide, so once is enough.
+            // ponytail: assumes 2-way SMT; query the physical count if a
+            // non-SMT many-core box ever shows up as slow.
+            Cv2.SetNumThreads(Math.Min(Environment.ProcessorCount, Math.Max(4, Environment.ProcessorCount / 2)));
             _detector = new YuNetFaceDetector(RequireModel(modelDir, YuNetModel));
-            _vbm = new VirtualBackgroundModel(new PersonSegmenter(RequireModel(modelDir, SegModel)));
+            var segmenter = new PersonSegmenter(RequireModel(modelDir, SegModel));
+            _vbm = new VirtualBackgroundModel(segmenter);
+            if (frameSize.Width > 0 && frameSize.Height > 0)
+                using (var blank = new Mat(frameSize, MatType.CV_8UC3, Scalar.All(0)))
+                {
+                    segmenter.Segment(blank).Dispose();
+                    _detector.Detect(blank);
+                }
         }
 
         private static string RequireModel(string dir, string name)
@@ -112,8 +133,11 @@ namespace VeBeGe
 
         /// Processes the BGR frame in place.
         /// padPx: dilate the subject mask; stayFrames: how long a lost face
-        /// keeps shielding the background; bodyScale: body width in face widths.
-        public void Process(Mat frame, int padPx, int stayFrames, double bodyScale)
+        /// keeps shielding the background; bodyScale: body width in face widths;
+        /// elapsedFrames: camera frames since the last processed one (1 when
+        /// every frame is processed), so the heat cooldown runs on camera time
+        /// even when the filter can't keep up.
+        public void Process(Mat frame, int padPx, int stayFrames, double bodyScale, int elapsedFrames = 1)
         {
             if (frame == null || frame.Empty()) return;
             LastStageMs.Clear();
@@ -127,16 +151,27 @@ namespace VeBeGe
 
             using (var clean = frame.Clone())
             {
-                // Detect faces on the background cutout only, so the webcam
-                // user is never treated as a background person.
-                IReadOnlyList<Rect> detections;
-                if (_frameNo++ % DetectEvery == 0)
-                {
-                    using (var cut = _vbm.BackgroundCutout(frame))
-                        detections = _detector.Detect(cut);
-                    _lastDetections = detections;
-                }
-                else detections = _lastDetections;
+                // Face detection (on the background cutout only, so the webcam
+                // user is never treated as a background person) and the flow
+                // half of the heat update are independent, each on its own
+                // net/state and both only reading the mask, so they run side
+                // by side. The tracked people are baked into the heat after.
+                IReadOnlyList<Rect> detections = null;
+                bool cameraEvent = false;
+                double detectMs = 0;
+                Parallel.Invoke(
+                    () =>
+                    {
+                        var sw = Stopwatch.StartNew();
+                        using (var cut = _vbm.BackgroundCutout(frame))
+                            detections = _detector.Detect(cut);
+                        detectMs = sw.Elapsed.TotalMilliseconds;
+                    },
+                    () => cameraEvent = _vbm.UpdateMotion(frame, elapsedFrames));
+                Mark("det|heat");   // wall time of the pair; each one's own cost follows
+                LastStageMs.Add(new KeyValuePair<string, double>("detect", detectMs));
+                LastStageMs.Add(new KeyValuePair<string, double>("heat", _vbm.LastHeatMs));
+                LastStageMs.AddRange(_vbm.LastHeatStages);   // heat's internal phases
                 // Segmentation can lag a frame when the user moves fast, leaving
                 // their face uncovered in the cutout; detected, it would become a
                 // phantom "background person" whose body region blurs most of
@@ -147,7 +182,6 @@ namespace VeBeGe
                 var kept = new List<Rect>();
                 foreach (var d in detections)
                     if (!_vbm.NearSubject(d)) kept.Add(d);
-                Mark("detect");
 
                 _tracker.MaxAge = Math.Max(0, stayFrames);
                 var people = new List<Rect>();
@@ -173,14 +207,8 @@ namespace VeBeGe
                 // Learn the scene where nobody is, replace the whole background
                 // with the learned plate (unlearned areas keep the live frame),
                 // then composite the live subject back on top.
-                _vbm.Update(frame, people);
-                Mark("update");
-                // Split update into its two halves for the diagnostics.
-                LastStageMs[LastStageMs.Count - 1] = new KeyValuePair<string, double>(
-                    "learn", LastStageMs[LastStageMs.Count - 1].Value - _vbm.LastHeatMs);
-                LastStageMs.Insert(LastStageMs.Count - 1,
-                    new KeyValuePair<string, double>("heat", _vbm.LastHeatMs));
-                LastStageMs.AddRange(_vbm.LastHeatStages);   // heat's internal phases
+                _vbm.Update(frame, people, cameraEvent);
+                Mark("learn");
                 _vbm.FillKnownBackground(frame, new Rect(0, 0, frame.Width, frame.Height));
                 Mark("fill");
                 // Fallback for movers we can't erase (no learned background behind them

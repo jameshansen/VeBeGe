@@ -28,9 +28,8 @@ namespace VeBeGe
         private readonly object _gate = new object();
         private readonly LoadingOverlay _loading = new LoadingOverlay();
         private readonly Stopwatch _clock = Stopwatch.StartNew();
-        private readonly int _pad, _stayFrames, _cooldownFrames;
-        private readonly double _bodyScale, _budget;
-        private double _firstAt = -1;    // clock at the first processed frame (model load excluded)
+        private readonly int _pad, _stayFrames;
+        private readonly double _bodyScale;
         private int _resetSeen, _resetShown;
 
         private Task<VbgFilter> _load;   // model load, off the caller's thread
@@ -40,29 +39,43 @@ namespace VeBeGe
         private Mat _shown;              // last finished output: what Present repeats
         private double _progress;        // learn progress, sampled when a Process finishes
         private long _processed;
+        private readonly double _fps;
+        private double _lastStart = -1;  // clock at the last realtime Process start
+        private double _owed;            // fractional camera frames carried to the next one
 
         /// fps is the source's frame rate: the filter's tuning is in seconds
-        /// (ini [Filter]) and converts to frames against it.
-        public VbgPipeline(string modelDir, double fps)
+        /// (ini [Filter]) and converts to frames against it. frameSize is what
+        /// the source delivers: the models are warmed up at that shape during
+        /// the load, so the first real frame isn't the slow one.
+        public VbgPipeline(string modelDir, double fps, Size frameSize)
         {
             _pad = Config.Padding;
             _bodyScale = Config.BodyScale;
+            _fps = fps;
             _stayFrames = (int)Math.Round(Config.StaySeconds * fps);
-            _cooldownFrames = (int)Math.Round(Config.HeatCooldownSeconds * fps);
-            _loading.Budget = _budget = Config.StartupSeconds;
+            _loading.Budget = Config.StartupSeconds;
             // Loading the ONNX models takes a moment. Off the caller's thread,
             // so the loading screen is live and moving from the very first
             // frame instead of the consuming app sitting on the driver's
             // static placeholder.
-            _load = Task.Run(() => new VbgFilter(modelDir)
+            _load = Task.Run(() =>
             {
-                HeatMinFlow = Config.HeatMinFlow,
-                HeatSpread = Config.HeatSpread,
-                HeatCooldownFrames = _cooldownFrames,
-                MaskHoldFrames = (int)Math.Round(Config.MaskHoldSeconds * fps),
-                QuietShieldFrames = (int)Math.Round(Config.QuietShieldSeconds * fps),
+                var sw = Stopwatch.StartNew();
+                var f = new VbgFilter(modelDir, frameSize)
+                {
+                    HeatMinFlow = Config.HeatMinFlow,
+                    HeatSpread = Config.HeatSpread,
+                    HeatCooldownFrames = (int)Math.Round(Config.HeatCooldownSeconds * fps),
+                    MaskHoldFrames = (int)Math.Round(Config.MaskHoldSeconds * fps),
+                    QuietShieldFrames = (int)Math.Round(Config.QuietShieldSeconds * fps),
+                };
+                LoadMs = sw.Elapsed.TotalMilliseconds;
+                return f;
             });
         }
+
+        /// Wall time the model load (read + warm-up) took, once it has.
+        public double LoadMs { get; private set; }
 
         /// The filter itself, for the diagnostic views (mask, plate, heat, the
         /// tracked people). Null until the models are up. Valid to read on the
@@ -90,6 +103,7 @@ namespace VeBeGe
         /// implicitly.
         public bool Submit(Mat frame)
         {
+            if (frame == null || frame.Empty()) return false;
             if (_work != null)
             {
                 if (!_work.IsCompleted) return false;
@@ -97,33 +111,49 @@ namespace VeBeGe
                 _workFrame?.Dispose(); _workFrame = null;
             }
             VbgFilter filter = Ready(false);
-            if (filter == null || frame == null || frame.Empty()) return false;
+            if (filter == null) return false;
             _workFrame = frame.Clone();
             Mat wf = _workFrame;
+            // The heat cooldown runs on WALL time: the filter is told how many
+            // frames of the configured rate went by since its last run. Not a
+            // count of delivered frames, a webcam in a dim room drops to 10 fps
+            // on its own, which turned a 3 s cooldown into 9 s and let the
+            // loading deadline reveal a half-learned plate.
+            double now = _clock.Elapsed.TotalSeconds;
+            int elapsed = 1;
+            if (_lastStart >= 0)
+            {
+                _owed += (now - _lastStart) * _fps;
+                elapsed = Math.Max(1, (int)_owed);
+                _owed -= elapsed;
+            }
+            _lastStart = now;
             _work = Task.Run(() =>
             {
                 // The service must keep serving whatever happens, so a filter
                 // fault is logged and swallowed here; the synchronous path
                 // below lets it out, the Testing tool wants to know.
-                try { RunFilter(filter, wf); }
+                try { RunFilter(filter, wf, elapsed); }
                 catch (Exception ex) { Log.Write("filter.Process", ex); }
             });
             return true;
         }
 
         /// Offline: run the filter on this frame, in place, on the calling
-        /// thread. The Testing tool deliberately processes every frame.
-        public void Process(Mat frame)
+        /// thread. The Testing tool deliberately processes every frame;
+        /// elapsedFrames > 1 tells the filter it skipped some (its realtime
+        /// simulation), so the heat cooldown still runs on video time.
+        public void Process(Mat frame, int elapsedFrames = 1)
         {
             VbgFilter filter = Ready(true);
             if (filter == null || frame == null || frame.Empty()) return;
-            RunFilter(filter, frame);
+            RunFilter(filter, frame, elapsedFrames);
         }
 
-        private void RunFilter(VbgFilter filter, Mat frame)
+        private void RunFilter(VbgFilter filter, Mat frame, int elapsedFrames)
         {
             var sw = Stopwatch.StartNew();
-            filter.Process(frame, _pad, _stayFrames, _bodyScale);
+            filter.Process(frame, _pad, _stayFrames, _bodyScale, elapsedFrames);
             LastProcessMs = sw.Elapsed.TotalMilliseconds;
             lock (_gate)
             {
@@ -157,8 +187,7 @@ namespace VeBeGe
             {
                 if (_shown != null && _shown.Size() == dst.Size() && _shown.Type() == dst.Type())
                     _shown.CopyTo(dst);
-                if (!_loading.Done) Deadline(seconds);
-                else if (_resetShown != _resetSeen)
+                if (_loading.Done && _resetShown != _resetSeen)
                 {
                     _loading.Restart(seconds);   // camera moved, the plate is gone
                     // Progress stops being published once the screen is down, so
@@ -169,29 +198,6 @@ namespace VeBeGe
                 _resetShown = _resetSeen;
                 _loading.Apply(dst, _progress, seconds);
             }
-        }
-
-        // Hold the loading screen's deadline out past the point where the plate
-        // can first exist. The heatmap starts FULLY hot and cools one step per
-        // PROCESSED frame, so nothing is learnable until HeatCooldownFrames of
-        // them have gone through: at 30 fps configured and ~7 fps of real
-        // throughput that is five times HeatCooldownSeconds of wall clock, well
-        // past a 10 s budget. Giving up before then reveals exactly the
-        // unerased, tier-two-smeared frame this screen exists to hide, which
-        // then visibly heals as the plate finally seeds. Estimated from
-        // observed throughput, so it costs nothing on a machine that keeps up,
-        // and capped so a stalled filter can't hold the screen forever.
-        private void Deadline(double seconds)
-        {
-            long done = ProcessedFrames;
-            if (_firstAt < 0)
-            {
-                if (done > 0) _firstAt = seconds;   // models are up, timing starts
-                return;
-            }
-            if (done < 2 || _cooldownFrames <= 0) return;
-            double perFrame = (seconds - _firstAt) / done;
-            _loading.Budget = Math.Min(2 * _budget, Math.Max(_budget, perFrame * _cooldownFrames * 1.15));
         }
 
         // Collect the model load. wait = block for it (the offline path has

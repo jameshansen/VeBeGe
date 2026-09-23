@@ -93,7 +93,7 @@ namespace VeBeGe.Testing
             // through the filter (no realtime dropping unless -Realtime asks
             // for it), and the processed video gets the same output stage the
             // virtual camera does, loading screen included.
-            using (var pipe = new VbgPipeline(baseDir, fps))
+            using (var pipe = new VbgPipeline(baseDir, fps, size))
             using (var perf = new PerfLog(pPerf, $"mp4: {stem} @ {width}x{height}, {loops}x loop"))
             using (var wProc = new VideoWriter(pProcessed, fourcc, fps, size))
             using (var wMask = new VideoWriter(pMask, fourcc, fps, size))
@@ -125,17 +125,20 @@ namespace VeBeGe.Testing
                         using (var cap = new VideoCapture(input))
                         using (var frame = new Mat())
                         {
-                            var sw = new Stopwatch();
                             int read = 0;      // frames consumed from the clip this pass
                             double owed = 0;   // fractional frames a live camera delivered while busy
+                            int skipped = 0;   // frames dropped just before this one (the filter is told)
                             while (read < maxFrames && cap.Read(frame) && !frame.Empty())
                             {
                                 read++;
                                 frame.CopyTo(faceView);   // original scene, before the filter erases it
-                                pipe.Process(frame);
+                                pipe.Process(frame, 1 + skipped);
                                 VbgFilter filter = pipe.Filter;
                                 double ms = pipe.LastProcessMs;
+                                if (total == 0)
+                                    perf.Note($"models up in {pipe.LoadMs:0} ms, first frame {ms:0} ms");
                                 perf.Record(ms, filter.LastStageMs);
+                                skipped = 0;
                                 if (realtime)
                                 {
                                     // While Process ran, the "camera" delivered ms/frameMs
@@ -145,7 +148,7 @@ namespace VeBeGe.Testing
                                     owed += ms / frameMs - 1;
                                     while (owed >= 1 && read < maxFrames && cap.Grab())
                                     {
-                                        owed -= 1; dropped++; read++;
+                                        owed -= 1; dropped++; read++; skipped++;
                                     }
                                 }
                                 // Output stage, on VIDEO time: the clip is not

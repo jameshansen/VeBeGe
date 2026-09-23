@@ -13,5 +13,5 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyCopyright("MIT License")]
 [assembly: ComVisible(false)]
 [assembly: Guid("c3d40001-0001-4b01-8e01-000000000011")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyVersion("1.0.5.0")]
+[assembly: AssemblyFileVersion("1.0.5.0")]

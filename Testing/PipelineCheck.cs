@@ -153,17 +153,17 @@ namespace VeBeGe
             // app would see.
             int outFrames = 0;
             double elapsed;
-            using (var pipe = new VbgPipeline(modelDir, 30))
+            using (var pipe = new VbgPipeline(modelDir, 30, size))
             using (var play = new VideoCapture(clip))
             using (var w = new VideoWriter(outDir + "/loading.mp4", FourCC.MP4V, 30, size))
             using (var frame = new Mat())
             {
                 var clock = Stopwatch.StartNew();
                 double revealed = -1;   // keep filming a couple of seconds past the reveal
-                while ((pipe.Loading || clock.Elapsed.TotalSeconds < revealed + 2)
-                       && clock.Elapsed.TotalSeconds < 3 * budget)
+                while (clock.Elapsed.TotalSeconds < 3 * budget)
                 {
                     if (!pipe.Loading && revealed < 0) revealed = clock.Elapsed.TotalSeconds;
+                    if (revealed >= 0 && clock.Elapsed.TotalSeconds >= revealed + 2) break;
                     if (!play.Read(frame) || frame.Empty()) { play.Set(VideoCaptureProperties.PosFrames, 0); continue; }
                     Cv2.Resize(frame, frame, size);
                     pipe.Submit(frame);
@@ -175,22 +175,57 @@ namespace VeBeGe
                     if (wait > 0) Thread.Sleep(wait);
                 }
                 elapsed = clock.Elapsed.TotalSeconds;
-                int cooldown = pipe.Filter.HeatCooldownFrames;
-                Console.WriteLine($"pipeline: {outFrames} frames out in {elapsed:0.00} s "
+                double cooldownS = Config.HeatCooldownSeconds;
+                Console.WriteLine($"pipeline: models up in {pipe.LoadMs:0} ms, {outFrames} frames out in {elapsed:0.00} s "
                                   + $"({outFrames / elapsed:0.0} fps), filter ran {pipe.ProcessedFrames} times "
-                                  + $"({pipe.ProcessedFrames / elapsed:0.0} fps), cooldown {cooldown} frames");
+                                  + $"({pipe.ProcessedFrames / elapsed:0.0} fps), revealed at {revealed:0.00} s");
                 elapsed = revealed > 0 ? revealed : elapsed;
                 if (pipe.Loading) return Fail("loading screen never finished", 8);
                 if (pipe.ProcessedFrames < 5) return Fail("filter barely ran", 9);
                 // The plate cannot exist until the heatmap has had a full
-                // cooldown of PROCESSED frames. Revealing before that shows the
+                // cooldown of CAMERA time (it cools by elapsed frames, however
+                // many the filter processed). Revealing before that shows the
                 // unerased frame this screen exists to hide.
-                if (pipe.ProcessedFrames < cooldown)
-                    return Fail($"revealed after {pipe.ProcessedFrames} processed frames, "
-                                + $"before the plate can exist ({cooldown})", 14);
+                if (elapsed < cooldownS)
+                    return Fail($"revealed at {elapsed:0.00} s, before the plate can exist ({cooldownS} s)", 14);
                 if (outFrames / elapsed < 25) return Fail("output stage below camera rate", 10);
                 if (outFrames < pipe.ProcessedFrames * 2)
                     return Fail("output stage is not outrunning the filter, it is not decoupled", 11);
+            }
+
+            // 5. Loading time on a quiet scene. The heat cools on CAMERA time
+            // (Submit counts every frame, the filter cools by that many), so a
+            // static scene settles at HeatCooldownSeconds whatever the filter's
+            // throughput, and the screen is down at about cooldown + the two
+            // fades. Cooling per PROCESSED frame took cooldown x (camera fps /
+            // filter fps) instead, ~13 s at 7 fps, which is what this guards.
+            // Twice: the camera delivering its nominal 30 fps, and a dim-room
+            // 10 fps with the pipeline still told 30, which is the real-webcam
+            // case that used to take 9 s and reveal a half-learned plate.
+            double quietCool = Config.HeatCooldownSeconds;
+            foreach (double deliver in new[] { 30.0, 10.0 })
+            {
+                double quietDone;
+                using (var pipe = new VbgPipeline(modelDir, 30, size))
+                using (var frame = new Mat())
+                {
+                    var clock = Stopwatch.StartNew();
+                    int n = 0;
+                    while (pipe.Loading && clock.Elapsed.TotalSeconds < 3 * budget)
+                    {
+                        src.CopyTo(frame);
+                        pipe.Submit(frame);
+                        pipe.Present(frame);
+                        n++;
+                        int wait = (int)(n * 1000.0 / deliver - clock.Elapsed.TotalMilliseconds);
+                        if (wait > 0) Thread.Sleep(wait);
+                    }
+                    quietDone = clock.Elapsed.TotalSeconds;
+                    Console.WriteLine($"quiet scene at {deliver:0} fps: revealed at {quietDone:0.00} s "
+                                      + $"(cooldown {quietCool:0.#} s, filter ran at {pipe.ProcessedFrames / quietDone:0.0} fps)");
+                }
+                if (!(quietDone > quietCool && quietDone < quietCool + 3))
+                    return Fail($"quiet scene at {deliver:0} fps revealed at {quietDone:0.00} s, expected ~{quietCool + 1.5:0.0} s", 17);
             }
 
             Console.WriteLine("PipelineCheck passed");

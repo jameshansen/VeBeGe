@@ -1,33 +1,31 @@
 # mp4: bbc @ 506x290, 1x loop
-# started 2026-07-12 17:37:11
+# started 2026-09-23 15:50:35
 # times are the real filter.Process() cost per frame (excludes IO/display)
 elapsed_s	frames	inst_fps	avg_ms	avg_fps
-     1.1	    10	    9.4	  98.9	   9.4
-     2.1	    21	   10.9	  92.5	  10.1
-     3.1	    32	   10.6	  91.2	  10.3
-     4.1	    43	   10.8	  90.4	  10.4
-     5.1	    54	   10.9	  89.8	  10.5
-     6.2	    66	   11.1	  89.0	  10.6
-     7.2	    77	   10.9	  88.7	  10.7
-     8.2	    88	   10.7	  88.6	  10.7
-     9.3	    99	   10.7	  88.6	  10.7
+# models up in 108 ms, first frame 80 ms
+     1.0	    13	   13.0	  58.5	  13.0
+     2.0	    32	   18.9	  50.6	  15.9
+     3.0	    51	   18.4	  49.1	  16.7
+     4.0	    70	   19.0	  48.3	  17.3
+     5.1	    90	   19.2	  47.8	  17.7
+# realtime: processed 104 of 104 delivered frames, dropped 0 (0.0%)
 # ---- summary ----
 # frames         : 104
-# wall_time_s    : 9.76
-# avg_ms         : 88.64
-# min_ms         : 79.58
-# max_ms         : 127.96
-# throughput_fps : 10.7
-# stage seg     : avg    23.9 ms, max    57.6 ms
-# stage detect  : avg    19.2 ms, max    32.5 ms
-# stage heat    : avg    31.7 ms, max    56.7 ms
-# stage learn   : avg     3.5 ms, max     7.5 ms
-# stage h_gray  : avg     0.2 ms, max     1.1 ms
-# stage fill    : avg     0.1 ms, max     2.5 ms
-# stage tier2   : avg     7.5 ms, max    16.5 ms
-# stage comp    : avg     2.8 ms, max     6.0 ms
-# stage h_flow1 : avg    11.8 ms, max    33.8 ms
-# stage h_flow2 : avg    11.5 ms, max    18.4 ms
-# stage h_post  : avg     7.3 ms, max    10.3 ms
-# stage h_cool  : avg     0.1 ms, max     0.5 ms
-# stage h_ignite: avg     0.4 ms, max     1.1 ms
+# wall_time_s    : 5.80
+# avg_ms         : 47.21
+# min_ms         : 40.88
+# max_ms         : 100.73
+# throughput_fps : 17.9
+# stage seg     : avg    21.9 ms, max    29.3 ms
+# stage det|heat: avg    20.6 ms, max    43.6 ms
+# stage detect  : avg    18.1 ms, max    29.0 ms
+# stage heat    : avg    19.8 ms, max    43.3 ms
+# stage h_gray  : avg     0.2 ms, max     1.9 ms
+# stage learn   : avg     1.8 ms, max    35.3 ms
+# stage fill    : avg     0.0 ms, max     0.8 ms
+# stage tier2   : avg     2.0 ms, max    25.1 ms
+# stage comp    : avg     0.9 ms, max     3.1 ms
+# stage h_flow  : avg    17.4 ms, max    39.1 ms
+# stage h_post  : avg     1.4 ms, max     2.6 ms
+# stage h_cool  : avg     0.1 ms, max     0.4 ms
+# stage h_ignite: avg     0.6 ms, max     1.4 ms

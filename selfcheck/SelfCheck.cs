@@ -56,7 +56,7 @@ namespace VeBeGe
         private static void FilterPipeline()
         {
             string modelDir = AppDomain.CurrentDomain.BaseDirectory;
-            using (var filter = new VbgFilter(modelDir))
+            using (var filter = new VbgFilter(modelDir, new Size(640, 480)))
             using (var scene = new Mat(new Size(640, 480), MatType.CV_8UC3))
             {
                 // A textured static "room": flat colour + shapes.
@@ -90,7 +90,7 @@ namespace VeBeGe
         {
             string modelDir = AppDomain.CurrentDomain.BaseDirectory;
             var faderRect = new Rect(100, 300, 80, 80);
-            using (var filter = new VbgFilter(modelDir) { HeatCooldownFrames = 20 })
+            using (var filter = new VbgFilter(modelDir, new Size(640, 480)) { HeatCooldownFrames = 20 })
             using (var scene = new Mat(new Size(640, 480), MatType.CV_8UC3, new Scalar(40, 90, 140)))
             {
                 Cv2.Rectangle(scene, new Rect(50, 60, 200, 150), new Scalar(200, 200, 200), -1);

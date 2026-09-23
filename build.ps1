@@ -44,6 +44,21 @@ Write-Host "MSBuild  : $msbuild"
 Write-Host "Solution : $sln"
 Write-Host "Config   : $Configuration | Platform: x64`n"
 
+# Stamp the service assembly from version.txt. Windows Installer replaces a
+# versioned file only when the incoming version is higher, so with the
+# assembly stuck at 1.0.0.0 a same-version reinstall reported success and
+# silently kept the old exe. Rewritten in place so the file stays readable and
+# a VS build picks up the last stamp.
+$version = (Get-Content (Join-Path $root 'version.txt') -Raw).Trim()
+if ($version -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw "version.txt must be four-part (e.g. 1.0.0.1), got '$version'." }
+$asmInfo = Join-Path $root 'vebege_service\Properties\AssemblyInfo.cs'
+$before = [IO.File]::ReadAllText($asmInfo)
+$after = $before -replace 'Assembly(File)?Version\("[^"]*"\)', "Assembly`$1Version(`"$version`")"
+if ($after -ne $before) {
+    [IO.File]::WriteAllText($asmInfo, $after, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Host "Stamped  : vebege_service $version`n"
+}
+
 # x64: the DirectShow driver is x64-only, and this also forces the C# exe to 64-bit.
 & $msbuild $sln /t:Build /p:Configuration=$Configuration /p:Platform=x64 /m /v:minimal /nologo
 if ($LASTEXITCODE -ne 0) {

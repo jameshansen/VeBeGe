@@ -59,6 +59,15 @@ namespace VeBeGe
         /// The live motion heatmap (cooldown frames remaining; 0 = cold). Diagnostic view.
         public Mat Heat => _heat;
 
+        /// Fraction of the frame the last FillTierTwo had to fall back on
+        /// (hot over never-learned background, subject halo excluded): what
+        /// would be smeared if the feed were shown now. 1 until the plate
+        /// exists. The loading screen's "done" signal: mean coldness never
+        /// quite reaches 1 on a real webcam (sensor-noise flow keeps a few
+        /// percent hot forever), but once the plate covers the scene there is
+        /// nothing left to hide.
+        public double TierTwoHoles { get; private set; } = 1;
+
         /// How far the scene has cooled, 0..1: mean coldness over the frame,
         /// i.e. how much of the cooldown the heatmap has worked through. The
         /// map ignites FULLY at startup and cools one frame per frame, so this
@@ -72,8 +81,8 @@ namespace VeBeGe
             _heat == null ? 0
                 : 1 - Cv2.Mean(_heat).Val0 / Math.Max(1, Math.Min(255, HeatCooldownFrames));
 
-        /// Wall time (ms) UpdateHeat took inside the last Update call, plus its
-        /// internal phase breakdown. Diagnostics for the Testing harness.
+        /// Wall time (ms) the last UpdateMotion took, plus its internal phase
+        /// breakdown. Diagnostics for the Testing harness.
         public double LastHeatMs { get; private set; }
         public readonly List<KeyValuePair<string, double>> LastHeatStages =
             new List<KeyValuePair<string, double>>();
@@ -237,15 +246,42 @@ namespace VeBeGe
             return cut;
         }
 
-        /// Learn the background wherever there's no person: not the segmented
-        /// subject, and not any tracked background person (so they never bake
-        /// in). Newly-revealed pixels become "known". Resets on a scene change.
-        public void Update(Mat frame, IReadOnlyList<Rect> people)
+        /// Phase two of the per-frame update, after UpdateMotion: bake the
+        /// tracked people into the heat, then learn the background wherever
+        /// there's no person: not the segmented subject, and not any tracked
+        /// background person (so they never bake in). Newly-revealed pixels
+        /// become "known". Resets on a sustained scene change. cameraEvent is
+        /// what UpdateMotion returned for this frame.
+        public void Update(Mat frame, IReadOnlyList<Rect> people, bool cameraEvent)
         {
-            if (_fgMask == null) return;
-            var heatSw = System.Diagnostics.Stopwatch.StartNew();
-            bool cameraEvent = UpdateHeat(frame, people);
-            LastHeatMs = heatSw.Elapsed.TotalMilliseconds;
+            if (_fgMask == null || _heat == null) return;
+            int cooldown = Math.Max(1, Math.Min(255, HeatCooldownFrames));
+
+            // Face detection feeds the heatmap: anywhere the tracker says a
+            // person is (including the staytime after a lost face) is hot by
+            // definition. When the track finally expires, the heat it left
+            // decays over the cooldown, the layers hand off to each other.
+            if (people != null)
+                foreach (var r in people)
+                    if (r.Width > 0 && r.Height > 0)
+                        Cv2.Rectangle(_heat, r, Scalar.All(cooldown), -1);
+
+            // Escape hatch: if virtually everything has stayed hot for several
+            // cooldowns (an unstable camera the stabiliser can't fully cancel),
+            // the motion signal is telling us nothing. Drop it and degrade to
+            // detection-only shielding rather than blocking learning forever.
+            _hotRun = Cv2.CountNonZero(_heat) > _heat.Total() * 0.9 ? _hotRun + 1 : 0;
+            if (_hotRun > cooldown * 3)
+            {
+                _heat.SetTo(Scalar.All(0));
+                _hotRun = 0;
+            }
+
+            // Remember this frame's subject mask so next frame can immunise the
+            // path it sweeps as it moves.
+            _prevFgMask?.Dispose();
+            _prevFgMask = _fgMask.Clone();
+
             // Camera event (shake / pan / exposure step): the frame tells us
             // nothing about people, so change nothing, don't learn, don't
             // reset. The plate survives transients intact.
@@ -280,7 +316,6 @@ namespace VeBeGe
                 }
                 else
                 {
-                    int cooldown = Math.Max(1, Math.Min(255, HeatCooldownFrames));
                     using (var coldHard = new Mat())   // 255 = fully-cold background (seed/known gate)
                     using (var softBand = new Mat())   // 255 where heat is mid-ramp (needs float blend)
                     {
@@ -291,52 +326,31 @@ namespace VeBeGe
                         using (var knownBefore = _known.Clone())
                         using (var fresh = new Mat())
                         using (var blended = new Mat())
+                        using (var learnMask = new Mat())
                         {
-                            if (Cv2.CountNonZero(softBand) == 0)
+                            // Fully-cold background learns at a constant LearnRate: one
+                            // SIMD 8-bit AddWeighted over the frame, exact. Fully-hot
+                            // pixels don't learn at all. Only the heat's soft edge in
+                            // between needs the per-pixel float ramp, and that band is
+                            // small (HeatSpread px around whatever moved), so the float
+                            // work runs on its bounding box alone, on top of the same
+                            // blend. Identical to running the ramp over the whole frame,
+                            // at a fraction of the cost.
+                            Cv2.AddWeighted(frame, LearnRate, _bg, 1 - LearnRate, 0, blended);
+                            Cv2.BitwiseAnd(knownBefore, coldHard, learnMask);
+                            if (Cv2.CountNonZero(softBand) > 0)
                             {
-                                // Quiet scene: heat is binary (0 or full cooldown), so the
-                                // soft per-pixel ramp in the else branch degenerates to a
-                                // constant LearnRate on fully-cold background and 0
-                                // everywhere else. One SIMD 8-bit AddWeighted + masked
-                                // copy is exact and ~4x cheaper than the float path; this
-                                // is the steady state whenever nothing has moved for a
-                                // full cooldown.
-                                using (var learnMask = new Mat())
-                                {
-                                    Cv2.AddWeighted(frame, LearnRate, _bg, 1 - LearnRate, 0, blended);
-                                    Cv2.BitwiseAnd(knownBefore, coldHard, learnMask);
-                                    blended.CopyTo(_bg, learnMask);
-                                }
+                                Rect band = Cv2.BoundingRect(softBand);
+                                using (var heatR = new Mat(_heat, band))
+                                using (var bgR = new Mat(bg, band))
+                                using (var plateR = new Mat(_bg, band))
+                                using (var frameR = new Mat(frame, band))
+                                using (var outR = new Mat(blended, band))
+                                    SoftBlend(heatR, bgR, plateR, frameR, outR, cooldown);
+                                Cv2.BitwiseOr(learnMask, softBand, learnMask);
+                                Cv2.BitwiseAnd(learnMask, knownBefore, learnMask);
                             }
-                            else
-                            {
-                                // Soft motion gate. coldW in [0,1] is per-pixel "coldness": 1 where
-                                // fully cold (heat 0 ⇒ learn at full rate), 0 where fully hot, ramping
-                                // across the heat's soft edge, gated to background (no person) pixels.
-                                // Scaling the learn rate by it fades the plate in across the boundary
-                                // instead of switching it on at a hard ring.
-                                using (var coldW = new Mat())  // CV_32F, background-gated coldness
-                                using (var wr3 = new Mat())    // per-pixel learn rate, CV_32FC3
-                                using (var bgF = new Mat())
-                                using (var frF = new Mat())
-                                {
-                                    _heat.ConvertTo(coldW, MatType.CV_32FC1, -1.0 / cooldown, 1.0);   // 1..0
-                                    using (var bgf = new Mat())
-                                    {
-                                        bg.ConvertTo(bgf, MatType.CV_32FC1, 1.0 / 255.0);            // background 0/1
-                                        Cv2.Multiply(coldW, bgf, coldW);
-                                    }
-                                    coldW.ConvertTo(coldW, MatType.CV_32FC1, LearnRate);         // coldW*LearnRate
-                                    Cv2.CvtColor(coldW, wr3, ColorConversionCodes.GRAY2BGR);
-                                    _bg.ConvertTo(bgF, MatType.CV_32FC3);
-                                    frame.ConvertTo(frF, MatType.CV_32FC3);
-                                    Cv2.Subtract(frF, bgF, frF);        // blended = bgF + (frF-bgF)*wr3
-                                    Cv2.Multiply(frF, wr3, frF);
-                                    Cv2.Add(bgF, frF, blended);
-                                    blended.ConvertTo(blended, _bg.Type());
-                                }
-                                blended.CopyTo(_bg, knownBefore);   // only smooth already-known pixels
-                            }
+                            blended.CopyTo(_bg, learnMask);   // only smooth already-known pixels
 
                             // Freshly-revealed background (visible now, not yet known) is
                             // SEEDED at full value, blending it up from black would copy
@@ -348,6 +362,27 @@ namespace VeBeGe
                         }
                     }
                 }
+            }
+        }
+
+        // Soft motion gate. coldW in [0,1] is per-pixel "coldness": 1 where
+        // fully cold (heat 0 ⇒ learn at full rate), 0 where fully hot, ramping
+        // across the heat's soft edge, gated to background (no person) pixels.
+        // Scaling the learn rate by it fades the plate in across the boundary
+        // instead of switching it on at a hard ring. out = plate + (frame-plate)*coldW*LearnRate.
+        private static void SoftBlend(Mat heat, Mat bg, Mat plate, Mat frame, Mat outp, int cooldown)
+        {
+            using (var w1 = new Mat())   // CV_32F per-pixel learn rate: coldness*LearnRate, 0 on person pixels
+            using (var w2 = new Mat())   // 1 - w1
+            using (var person = new Mat())
+            {
+                heat.ConvertTo(w1, MatType.CV_32FC1, -LearnRate / cooldown, LearnRate);
+                Cv2.BitwiseNot(bg, person);
+                w1.SetTo(Scalar.All(0), person);
+                w1.ConvertTo(w2, MatType.CV_32FC1, -1, 1);
+                // out = (frame*w1 + plate*w2)/(w1+w2), one pass over the 8-bit
+                // images with float weights: no 3-channel float round trips.
+                Cv2.BlendLinear(frame, plate, w1, w2, outp);
             }
         }
 
@@ -375,26 +410,16 @@ namespace VeBeGe
         private static void CompositeRoi(Mat fgMask, Mat clean, Mat frame)
         {
             using (var alpha = new Mat())
-            using (var inv = new Mat())
-            using (var af = new Mat())
-            using (var invf = new Mat())
-            using (var cf = new Mat())
-            using (var ff = new Mat())
+            using (var w1 = new Mat())
+            using (var w2 = new Mat())
             {
                 Cv2.GaussianBlur(fgMask, alpha, new Size(FeatherKernel, FeatherKernel), 0);
-                Cv2.BitwiseNot(alpha, inv);                               // 255 - alpha, so af + invf = 1
-
-                Cv2.CvtColor(alpha, af, ColorConversionCodes.GRAY2BGR);
-                Cv2.CvtColor(inv, invf, ColorConversionCodes.GRAY2BGR);
-                af.ConvertTo(af, MatType.CV_32FC3, 1.0 / 255.0);
-                invf.ConvertTo(invf, MatType.CV_32FC3, 1.0 / 255.0);
-                clean.ConvertTo(cf, MatType.CV_32FC3);
-                frame.ConvertTo(ff, MatType.CV_32FC3);
-
-                Cv2.Multiply(cf, af, cf);
-                Cv2.Multiply(ff, invf, ff);
-                Cv2.Add(cf, ff, ff);
-                ff.ConvertTo(frame, frame.Type());
+                // cv::blendLinear is exactly out = (clean*w1 + frame*w2)/(w1+w2),
+                // one pass over 8-bit pixels with single-channel float weights,
+                // instead of converting both images to float and back.
+                alpha.ConvertTo(w1, MatType.CV_32FC1);
+                alpha.ConvertTo(w2, MatType.CV_32FC1, -1, 255);   // 255 - alpha
+                Cv2.BlendLinear(clean, frame, w1, w2, frame);
             }
         }
 
@@ -445,6 +470,7 @@ namespace VeBeGe
                         Cv2.Subtract(holes, fgHalo, holes);   // holes AND NOT (subject + halo)
                     }
                 int n = Cv2.CountNonZero(holes);
+                TierTwoHoles = (double)n / frame.Total();
                 if (n == 0) return;
                 // Guard: when the holes swamp the frame (startup, camera event) there's
                 // no clean border to interpolate from and inpaint smears garbage, keep
@@ -483,20 +509,30 @@ namespace VeBeGe
         // live. Ignition spreads HeatSpread px so a body's moving outline
         // covers its interior, the map smears 1 px/frame (heat drags along
         // with movement), and everything cools one frame per frame. Tracked
-        // people (face detection) ignite their body regions directly, so when
-        // detection loses them the heatmap takes over seamlessly. Starts fully
-        // hot: the scene must prove itself quiet before anything is learned.
+        // people (face detection) ignite their body regions directly, in
+        // Update, so when detection loses them the heatmap takes over
+        // seamlessly. Starts fully hot: the scene must prove itself quiet
+        // before anything is learned.
+        //
+        // Phase one of the per-frame update, and independent of face
+        // detection (it only reads the subject mask), so the filter runs the
+        // two side by side. steps = camera frames elapsed since the last
+        // processed one: the map cools by that many, so a pixel stays hot for
+        // HeatCooldownSeconds of WALL time whatever the filter's throughput.
+        // Cooling one step per processed frame instead stretched a 3 s cooldown
+        // to ~13 s at 7 fps, and the startup loading screen with it.
         //
         // Returns true on a camera event (a pan too big to align, or most of
         // the frame in true motion at once): the map freezes for that frame,
         // people keep their heat, nothing false-ignites.
-        private bool UpdateHeat(Mat frame, IReadOnlyList<Rect> people)
+        public bool UpdateMotion(Mat frame, int steps)
         {
             LastHeatStages.Clear();
             _heatSw.Restart();
             _heatLast = 0;
             bool cameraEvent = false;
             int cooldown = Math.Max(1, Math.Min(255, HeatCooldownFrames));
+            if (_fgMask == null) return false;
             using (var gray = new Mat())
             {
                 Cv2.CvtColor(frame, gray, ColorConversionCodes.BGR2GRAY);
@@ -515,15 +551,23 @@ namespace VeBeGe
                     if (_prevSmall != null)
                     {
                         double scale = gray.Cols / (double)CorrW;
+                        EnsureGrids(curSmall.Size());
+                        Mat motionSmall = null, slow = null;
                         using (var allowedSmall = BackgroundOnlyMask())
-                        using (var motionSmall = new Mat(curSmall.Size(), MatType.CV_8UC1, Scalar.All(0)))
                         using (var motion = new Mat())
                         {
-                            cameraEvent = !FlowIgnite(curSmall, _prevSmall, allowedSmall, scale, motionSmall);
-                            HeatMark("h_flow1");
-                            if (!cameraEvent && _oldSmall != null)
-                                FlowIgnite(curSmall, _oldSmall, allowedSmall, scale, motionSmall);
-                            HeatMark("h_flow2");
+                            // Background corners for the camera-motion fit, picked
+                            // once for both baselines. The fast (previous frame) and
+                            // slow (~0.5 s old) flows are independent: run them at once.
+                            Point2f[] corners = Cv2.GoodFeaturesToTrack(curSmall, 60, 0.01, 8, allowedSmall, 3, false, 0.04);
+                            Mat prev = _prevSmall, old = _oldSmall;
+                            System.Threading.Tasks.Parallel.Invoke(
+                                () => motionSmall = FlowMotion(curSmall, prev, corners, scale),
+                                () => { if (old != null) slow = FlowMotion(curSmall, old, corners, scale); });
+                            HeatMark("h_flow");
+                            cameraEvent = motionSmall == null;
+                            if (!cameraEvent && slow != null) Cv2.BitwiseOr(motionSmall, slow, motionSmall);
+                            slow?.Dispose();
                             if (!cameraEvent)
                             {
                                 // Border flow is unreliable; lone specks are noise.
@@ -563,7 +607,7 @@ namespace VeBeGe
                                 {
                                     using (var k3 = Cv2.GetStructuringElement(MorphShapes.Ellipse, new Size(3, 3)))
                                         Cv2.Dilate(_heat, _heat, k3);            // smear: heat flows 1 px/frame
-                                    Cv2.Subtract(_heat, Scalar.All(1), _heat);   // cool one frame (floors at 0)
+                                    Cv2.Subtract(_heat, Scalar.All(Math.Max(1, steps)), _heat);   // cool by elapsed camera frames (floors at 0)
                                     HeatMark("h_cool");
                                     // Soft ignition: instead of a hard-edged disc of full
                                     // cooldown, ramp the heat DOWN from full at the motion
@@ -592,6 +636,7 @@ namespace VeBeGe
                                 }
                             }
                         }
+                        motionSmall?.Dispose();
                     }
                     _prevSmall?.Dispose();
                     _prevSmall = curSmall.Clone();
@@ -603,32 +648,7 @@ namespace VeBeGe
                     _frameNo++;
                 }
             }
-
-            // Face detection feeds the heatmap: anywhere the tracker says a
-            // person is (including the staytime after a lost face) is hot by
-            // definition. When the track finally expires, the heat it left
-            // decays over the cooldown, the layers hand off to each other.
-            if (people != null)
-                foreach (var r in people)
-                    if (r.Width > 0 && r.Height > 0)
-                        Cv2.Rectangle(_heat, r, Scalar.All(cooldown), -1);
-
-            // Escape hatch: if virtually everything has stayed hot for several
-            // cooldowns (an unstable camera the stabiliser can't fully cancel),
-            // the motion signal is telling us nothing. Drop it and degrade to
-            // detection-only shielding rather than blocking learning forever.
-            _hotRun = Cv2.CountNonZero(_heat) > _heat.Total() * 0.9 ? _hotRun + 1 : 0;
-            if (_hotRun > cooldown * 3)
-            {
-                _heat.SetTo(Scalar.All(0));
-                _hotRun = 0;
-            }
-
-            // Remember this frame's subject mask so next frame can immunise the
-            // path it sweeps as it moves.
-            _prevFgMask?.Dispose();
-            _prevFgMask = _fgMask?.Clone();
-
+            LastHeatMs = _heatSw.Elapsed.TotalMilliseconds;
             return cameraEvent;
         }
 
@@ -648,7 +668,7 @@ namespace VeBeGe
         private static void DilateFast(Mat src, Mat dst, int radius)
         {
             const int DownW = 320;
-            if (src.Cols <= DownW * 2)
+            if (src.Cols <= DownW)
             {
                 using (var k = Cv2.GetStructuringElement(MorphShapes.Ellipse,
                            new Size(radius * 2 + 1, radius * 2 + 1)))
@@ -691,12 +711,12 @@ namespace VeBeGe
 
         // Camera motion between two small frames: a rigid transform (rotation +
         // translation + scale) RANSAC-fitted to the sparse flow of background
-        // corners. RANSAC discards people moving through as outliers, so only
-        // the camera's own motion is measured. Small-scale coordinates.
+        // corners (picked on fromSmall by the caller). RANSAC discards people
+        // moving through as outliers, so only the camera's own motion is
+        // measured. Small-scale coordinates.
         // Null = nothing trackable (featureless scene) or no consensus.
-        private static Mat EstimateCameraMotion(Mat fromSmall, Mat toSmall, Mat allowedSmall)
+        private static Mat EstimateCameraMotion(Mat fromSmall, Mat toSmall, Point2f[] corners)
         {
-            Point2f[] corners = Cv2.GoodFeaturesToTrack(fromSmall, 60, 0.01, 8, allowedSmall, 3, false, 0.04);
             if (corners.Length < 8) return null;
             var moved = (Point2f[])corners.Clone();   // initial guess: no motion
             Cv2.CalcOpticalFlowPyrLK(fromSmall, toSmall, corners, ref moved, out byte[] status, out float[] err);
@@ -720,25 +740,26 @@ namespace VeBeGe
 
         // Dense optical flow from the current frame BACK to the baseline (so
         // results are indexed at current pixel positions), minus the camera's
-        // rigid motion, ORs pixels whose residual displacement exceeds
-        // HeatMinFlow into motionSmall. Brightness-only change produces no
-        // displacement and is ignored. False = camera moved too far to align
-        // (a real pan). A featureless scene estimates no camera motion and
-        // falls back to raw flow, which is what a fixed camera gives anyway.
-        private bool FlowIgnite(Mat curSmall, Mat baseSmall, Mat allowedSmall, double scale, Mat motionSmall)
+        // rigid motion: returns an 8-bit small-scale mask of pixels whose
+        // residual displacement exceeds HeatMinFlow (caller disposes).
+        // Brightness-only change produces no displacement and is ignored.
+        // Null = camera moved too far to align (a real pan). A featureless
+        // scene estimates no camera motion and falls back to raw flow, which is
+        // what a fixed camera gives anyway. Reads only shared state (the grids,
+        // HeatMinFlow), so two of these run concurrently.
+        private Mat FlowMotion(Mat curSmall, Mat baseSmall, Point2f[] corners, double scale)
         {
             double a = 1, b = 0, tx = 0, c = 0, d = 1, ty = 0;
-            using (Mat m = EstimateCameraMotion(curSmall, baseSmall, allowedSmall))
+            using (Mat m = EstimateCameraMotion(curSmall, baseSmall, corners))
             {
                 if (m != null)
                 {
                     a = m.Get<double>(0, 0); b = m.Get<double>(0, 1); tx = m.Get<double>(0, 2);
                     c = m.Get<double>(1, 0); d = m.Get<double>(1, 1); ty = m.Get<double>(1, 2);
                     if (Math.Abs(tx) * scale > MaxDriftPx || Math.Abs(ty) * scale > MaxDriftPx)
-                        return false;
+                        return null;
                 }
             }
-            EnsureGrids(curSmall.Size());
             using (var flow = new Mat())
             {
                 Cv2.CalcOpticalFlowFarneback(curSmall, baseSmall, flow,
@@ -749,7 +770,6 @@ namespace VeBeGe
                 using (var px = new Mat())
                 using (var py = new Mat())
                 using (var mag = new Mat())
-                using (var m8 = new Mat())
                 {
                     // The rigid camera motion predicts flow (A·p + t) − p per pixel;
                     // subtract it so only motion relative to the scene remains.
@@ -759,11 +779,11 @@ namespace VeBeGe
                     Cv2.Subtract(ch[1], py, ch[1]);
                     Cv2.Magnitude(ch[0], ch[1], mag);
                     Cv2.Threshold(mag, mag, Math.Max(0.25, HeatMinFlow / scale), 255, ThresholdTypes.Binary);
+                    var m8 = new Mat();
                     mag.ConvertTo(m8, MatType.CV_8UC1);
-                    Cv2.BitwiseOr(motionSmall, m8, motionSmall);
+                    return m8;
                 }
             }
-            return true;
         }
 
         // Pixel-coordinate ramps used to evaluate the rigid motion per pixel.

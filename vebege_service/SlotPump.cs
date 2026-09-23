@@ -43,6 +43,7 @@ namespace VeBeGe
             VideoCapture cap = null;
             VbgPipeline pipe = null;
             bool loggedBroken = false;      // models missing/corrupt → passthrough, log once
+            bool loggedLoad = false;
             uint lastHb = 0;
             DateTime lastHbChange = DateTime.MinValue;
 
@@ -78,6 +79,13 @@ namespace VeBeGe
 
                     if (cap == null)
                     {
+                        // New session, new pipeline: models load in the
+                        // background, overlapping the DirectShow open below
+                        // (both take a good part of a second), and the loading
+                        // screen starts with the first frame. Kept across a
+                        // capture glitch, that must not wipe the learned plate
+                        // or replay the loading screen.
+                        if (pipe == null) pipe = new VbgPipeline(Config.Dir, fps, new Size(w, h));
                         cap = new VideoCapture(_deviceIndex, VideoCaptureAPIs.DSHOW);
                         if (!cap.IsOpened())
                         {
@@ -88,11 +96,6 @@ namespace VeBeGe
                         cap.Set(VideoCaptureProperties.FrameWidth, w);
                         cap.Set(VideoCaptureProperties.FrameHeight, h);
                         Log.Write($"slot {_slot}: streaming, opened \"{DeviceName}\" as index {_deviceIndex}");
-                        // New session, new pipeline: models load in the
-                        // background and the loading screen starts now. Kept
-                        // across a capture glitch below, that must not wipe the
-                        // learned plate or replay the loading screen.
-                        if (pipe == null) pipe = new VbgPipeline(Config.Dir, fps);
                     }
 
                     if (!cap.Read(frame) || frame.Empty())
@@ -112,6 +115,11 @@ namespace VeBeGe
                     // steady stream going to the consuming app.
                     pipe.Submit(frame);
                     pipe.Present(frame);
+                    if (pipe.LoadMs > 0 && !loggedLoad)
+                    {
+                        loggedLoad = true;
+                        Log.Write($"slot {_slot}: models up in {pipe.LoadMs:0} ms");
+                    }
                     if (pipe.Broken && !loggedBroken)
                     {
                         loggedBroken = true;   // still serve raw frames, camera "just works"

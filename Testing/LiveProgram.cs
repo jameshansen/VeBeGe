@@ -52,7 +52,7 @@ namespace VeBeGe.Testing
                 // (so the startup loading screen animates exactly as it does on
                 // the virtual camera). The diagnostic views update at the
                 // filter's own rate, when a new result lands.
-                using (var pipe = new VbgPipeline(baseDir, fps))
+                using (var pipe = new VbgPipeline(baseDir, fps, new Size(cap.FrameWidth, cap.FrameHeight)))
                 using (var perf = new PerfLog(perfPath, $"live: [{index}] {cams.Find(c => c.Index == index)?.Name} @ {Config.Width}x{Config.Height}", echoToConsole: true))
                 using (var frame = new Mat())
                 using (var submitted = new Mat())
